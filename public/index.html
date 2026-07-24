@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#1a3a5c" />
+  <meta name="description" content="Sistema de orçamentos AZ Elétrica" />
+  <title>AZ Elétrica — Orçamentos</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-txt">AZ</span>
+          <span class="logo-sub">Elétrica</span>
+        </div>
+        <button class="btn-novo" id="btn-novo">+ Novo</button>
+      </div>
+      <div class="sidebar-lista" id="sidebar-lista"></div>
+      <div class="sidebar-footer" id="sidebar-footer">0 orçamentos</div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main" id="main">
+      <div class="main-vazio">
+        <div class="main-vazio-box">
+          <div class="main-vazio-icone">⚡</div>
+          <h2>AZ Elétrica — Orçamentos</h2>
+          <p>Selecione um orçamento na lista ou crie um novo para começar.</p>
+          <button class="btn-criar" onclick="criarNovo()">+ Criar primeiro orçamento</button>
+        </div>
+      </div>
+    </main>
+
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
