@@ -35,8 +35,6 @@
   <!-- App principal -->
   <div id="app" style="display:none">
     <div class="layout">
-
-      <!-- Sidebar -->
       <aside class="sidebar">
         <div class="sidebar-header">
           <div class="logo">
@@ -55,17 +53,14 @@
           <button id="btn-logout" class="btn-logout">Sair</button>
         </div>
       </aside>
-
-      <!-- Main -->
       <main class="main" id="main"></main>
-
     </div>
   </div>
 
   <!-- Toast -->
   <div id="toast" class="toast"></div>
 
-  <script src="/api.js"></script>
-  <script src="/app.js"></script>
+  <!-- Um único script — sem dependência de ordem -->
+  <script src="/main.js?v=4"></script>
 </body>
 </html>
