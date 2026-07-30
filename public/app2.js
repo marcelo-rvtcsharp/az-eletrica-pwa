@@ -794,6 +794,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (getToken()) {
     mostrarApp();
   } else {
-    mostrarLogin();
+    await mostrarApp();
   }
 });
