@@ -783,7 +783,7 @@ if ('serviceWorker' in navigator) {
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('login-form').addEventListener('submit', handleLogin);
   document.getElementById('btn-logout').addEventListener('click', handleLogout);
 
