@@ -106,11 +106,13 @@ function mostrarLogin() {
   document.getElementById('login-screen').style.display = 'flex';
 }
 
-function mostrarApp() {
+async function mostrarApp() {
   document.getElementById('app').style.display = 'flex';
   document.getElementById('login-screen').style.display = 'none';
   const u = getUsuario();
   document.getElementById('usuario-nome').textContent = u?.nome || '';
+  // Aguarda para garantir que o token está no storage
+  await new Promise(r => setTimeout(r, 300));
   carregarTudo();
 }
 
@@ -152,6 +154,14 @@ function handleLogout() {
 
 // ── Carregar dados ─────────────────────────────────────────────────────────
 async function carregarTudo() {
+  // Verifica se token existe antes de carregar
+  const token = window.localStorage.getItem('az_token');
+  if (!token) {
+    console.warn('carregarTudo: sem token, abortando');
+    redirecionarLogin();
+    return;
+  }
+  console.log('carregarTudo: token ok, carregando dados...');
   try {
     const [obras, eletricistas, orcamentos, dashboard] = await Promise.all([
       GET('/obras/'),
