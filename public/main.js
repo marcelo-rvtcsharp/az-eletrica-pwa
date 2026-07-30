@@ -116,27 +116,26 @@ function mostrarApp() {
 
 async function handleLogin(e) {
   e.preventDefault();
-  const email = document.getElementById('login-email').value;
-  const senha = document.getElementById('login-senha').value;
+  const email = document.getElementById('login-email').value.trim();
+  const senha = document.getElementById('login-senha').value.trim();
   const btn = document.getElementById('btn-login');
   btn.textContent = 'Entrando...';
   btn.disabled = true;
   try {
-    const form = new URLSearchParams();
-    form.append('username', email);
-    form.append('password', senha);
-    const res = await fetch(API_URL + '/auth/login', {
+    const res = await fetch('https://web-production-a606c.up.railway.app/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form.toString(),
+      body: 'username=' + encodeURIComponent(email) + '&password=' + encodeURIComponent(senha),
     });
-    if (!res.ok) throw new Error('Email ou senha incorretos');
     const data = await res.json();
-    // Salva token ANTES de qualquer outra coisa
-    localStorage.setItem('az_token', data.access_token);
-    localStorage.setItem('az_usuario', JSON.stringify(data.usuario));
-    // Aguarda um tick para garantir que o storage foi gravado
-    await new Promise(r => setTimeout(r, 100));
+    if (!res.ok || !data.access_token) {
+      throw new Error(data.detail || 'Email ou senha incorretos');
+    }
+    window.localStorage.setItem('az_token', data.access_token);
+    window.localStorage.setItem('az_usuario', JSON.stringify(data.usuario));
+    await new Promise(r => setTimeout(r, 200));
+    const tokenSalvo = window.localStorage.getItem('az_token');
+    if (!tokenSalvo) throw new Error('Erro ao salvar sessao. Tente novamente.');
     mostrarApp();
   } catch (err) {
     toast(err.message, 'erro');
