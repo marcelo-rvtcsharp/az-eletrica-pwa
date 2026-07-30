@@ -125,15 +125,18 @@ async function handleLogin(e) {
     const form = new URLSearchParams();
     form.append('username', email);
     form.append('password', senha);
-    const res = await fetch(`${API_URL}/auth/login`, {
+    const res = await fetch(API_URL + '/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form,
+      body: form.toString(),
     });
     if (!res.ok) throw new Error('Email ou senha incorretos');
     const data = await res.json();
-    setToken(data.access_token);
-    setUsuario(data.usuario);
+    // Salva token ANTES de qualquer outra coisa
+    localStorage.setItem('az_token', data.access_token);
+    localStorage.setItem('az_usuario', JSON.stringify(data.usuario));
+    // Aguarda um tick para garantir que o storage foi gravado
+    await new Promise(r => setTimeout(r, 100));
     mostrarApp();
   } catch (err) {
     toast(err.message, 'erro');
