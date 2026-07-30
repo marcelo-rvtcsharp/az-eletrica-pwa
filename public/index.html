@@ -4,40 +4,68 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#1a3a5c" />
-  <meta name="description" content="Sistema de orçamentos AZ Elétrica" />
-  <title>AZ Elétrica — Orçamentos</title>
+  <title>AZ Elétrica</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <div class="layout">
 
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="logo">
-          <span class="logo-txt">AZ</span>
-          <span class="logo-sub">Elétrica</span>
-        </div>
-        <button class="btn-novo" id="btn-novo">+ Novo</button>
+  <!-- Tela de Login -->
+  <div id="login-screen">
+    <div class="login-box">
+      <div class="login-logo">
+        <span class="logo-txt">AZ</span>
+        <span class="logo-sub">Elétrica</span>
       </div>
-      <div class="sidebar-lista" id="sidebar-lista"></div>
-      <div class="sidebar-footer" id="sidebar-footer">0 orçamentos</div>
-    </aside>
-
-    <!-- Main -->
-    <main class="main" id="main">
-      <div class="main-vazio">
-        <div class="main-vazio-box">
-          <div class="main-vazio-icone">⚡</div>
-          <h2>AZ Elétrica — Orçamentos</h2>
-          <p>Selecione um orçamento na lista ou crie um novo para começar.</p>
-          <button class="btn-criar" onclick="criarNovo()">+ Criar primeiro orçamento</button>
+      <p class="login-desc">Sistema de gestão de equipes</p>
+      <form id="login-form">
+        <div class="field">
+          <label>Email</label>
+          <input id="login-email" type="email" placeholder="seu@email.com" required autocomplete="email" />
         </div>
-      </div>
-    </main>
-
+        <div class="field">
+          <label>Senha</label>
+          <input id="login-senha" type="password" placeholder="••••••••" required autocomplete="current-password" />
+        </div>
+        <button id="btn-login" type="submit" class="btn btn-primary btn-full">Entrar</button>
+      </form>
+    </div>
   </div>
+
+  <!-- App principal -->
+  <div id="app" style="display:none">
+    <div class="layout">
+
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="logo">
+            <span class="logo-txt">AZ</span>
+            <span class="logo-sub">Elétrica</span>
+          </div>
+          <div style="font-size:11px;color:rgba(255,215,0,0.6)" id="usuario-nome"></div>
+        </div>
+        <nav class="nav">
+          <div class="nav-item active" data-tela="dashboard">⚡ Dashboard</div>
+          <div class="nav-item" data-tela="orcamentos">📄 Orçamentos</div>
+          <div class="nav-item" data-tela="obras">🏗️ Obras</div>
+          <div class="nav-item" data-tela="equipe">👷 Equipe</div>
+        </nav>
+        <div class="sidebar-footer">
+          <button id="btn-logout" class="btn-logout">Sair</button>
+        </div>
+      </aside>
+
+      <!-- Main -->
+      <main class="main" id="main"></main>
+
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <script src="/api.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
