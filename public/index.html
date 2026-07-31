@@ -10,57 +10,42 @@
 </head>
 <body>
 
-  <!-- Tela de Login -->
-  <div id="login-screen">
-    <div class="login-box">
-      <div class="login-logo">
-        <span class="logo-txt">AZ</span>
-        <span class="logo-sub">Elétrica</span>
+<div id="login-screen" style="display:none">
+  <div class="login-box">
+    <div class="login-logo"><span class="logo-txt">AZ</span><span class="logo-sub">Elétrica</span></div>
+    <p class="login-desc">Sistema de gestão de equipes</p>
+    <form id="login-form">
+      <div class="field"><label>Email</label><input id="login-email" type="email" placeholder="seu@email.com" required autocomplete="email" /></div>
+      <div class="field"><label>Senha</label><input id="login-senha" type="password" placeholder="••••••••" required autocomplete="current-password" /></div>
+      <button id="btn-login" type="submit" class="btn btn-p btn-full">Entrar</button>
+    </form>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo"><span class="sl-az">AZ</span><span class="sl-sub">Elétrica</span></div>
+        <div id="usuario-nome"></div>
       </div>
-      <p class="login-desc">Sistema de gestão de equipes</p>
-      <form id="login-form">
-        <div class="field">
-          <label>Email</label>
-          <input id="login-email" type="email" placeholder="seu@email.com" required autocomplete="email" />
-        </div>
-        <div class="field">
-          <label>Senha</label>
-          <input id="login-senha" type="password" placeholder="••••••••" required autocomplete="current-password" />
-        </div>
-        <button id="btn-login" type="submit" class="btn btn-primary btn-full">Entrar</button>
-      </form>
-    </div>
+      <nav class="nav">
+        <div class="nav-item active" data-tela="dashboard"><i class="ti ti-layout-dashboard" aria-hidden="true"></i> <span>Dashboard</span></div>
+        <div class="nav-item" data-tela="apontamentos"><i class="ti ti-clock-check" aria-hidden="true"></i> <span>Apontamentos</span></div>
+        <div class="nav-item" data-tela="obras"><i class="ti ti-building-factory-2" aria-hidden="true"></i> <span>Obras</span></div>
+        <div class="nav-item" data-tela="equipe"><i class="ti ti-users" aria-hidden="true"></i> <span>Equipe</span></div>
+        <div class="nav-item" data-tela="orcamentos"><i class="ti ti-file-invoice" aria-hidden="true"></i> <span>Orçamentos</span></div>
+      </nav>
+      <div class="sidebar-footer"><button id="btn-logout" class="btn-logout">Sair</button></div>
+    </aside>
+    <main class="main" id="main"></main>
   </div>
+</div>
 
-  <!-- App principal -->
-  <div id="app" style="display:none">
-    <div class="layout">
-      <aside class="sidebar">
-        <div class="sidebar-header">
-          <div class="logo">
-            <span class="logo-txt">AZ</span>
-            <span class="logo-sub">Elétrica</span>
-          </div>
-          <div style="font-size:11px;color:rgba(255,215,0,0.6)" id="usuario-nome"></div>
-        </div>
-        <nav class="nav">
-          <div class="nav-item active" data-tela="dashboard">⚡ Dashboard</div>
-          <div class="nav-item" data-tela="orcamentos">📄 Orçamentos</div>
-          <div class="nav-item" data-tela="obras">🏗️ Obras</div>
-          <div class="nav-item" data-tela="equipe">👷 Equipe</div>
-        </nav>
-        <div class="sidebar-footer">
-          <button id="btn-logout" class="btn-logout">Sair</button>
-        </div>
-      </aside>
-      <main class="main" id="main"></main>
-    </div>
-  </div>
+<div id="modal-root"></div>
+<div id="toast" class="toast"></div>
 
-  <!-- Toast -->
-  <div id="toast" class="toast"></div>
-
-  <!-- Um único script — sem dependência de ordem -->
-  <script src="/app2.js"></script>
+<script src="/sw-register.js"></script>
+<script src="/app2.js"></script>
 </body>
 </html>
