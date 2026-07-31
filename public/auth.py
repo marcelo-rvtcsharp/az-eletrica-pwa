@@ -25,7 +25,6 @@ def verificar_senha(senha: str, hash: str) -> bool:
 
 def criar_token(data: dict) -> str:
     payload = data.copy()
-    # sub DEVE ser string conforme spec JWT
     if "sub" in payload:
         payload["sub"] = str(payload["sub"])
     payload["exp"] = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
