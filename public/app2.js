@@ -4,12 +4,13 @@
 
 const API = 'https://web-production-a606c.up.railway.app';
 
-// ── Token — memória + localStorage ───────────────────────────
-let _tokenCache = null;
+// Token em memória — evita qualquer problema de timing com localStorage
+window._AZ_TOKEN = localStorage.getItem('az_token') || null;
+
 const Token = {
-  get: () => _tokenCache || localStorage.getItem('az_token'),
-  set: (t) => { _tokenCache = t; localStorage.setItem('az_token', t); },
-  del: () => { _tokenCache = null; localStorage.removeItem('az_token'); localStorage.removeItem('az_user'); },
+  get: () => window._AZ_TOKEN,
+  set: (t) => { window._AZ_TOKEN = t; localStorage.setItem('az_token', t); },
+  del: () => { window._AZ_TOKEN = null; localStorage.removeItem('az_token'); localStorage.removeItem('az_user'); },
 };
 
 // ── Fetch com token ──────────────────────────────────────────
