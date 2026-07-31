@@ -4,11 +4,12 @@
 
 const API = 'https://web-production-a606c.up.railway.app';
 
-// ── Token ────────────────────────────────────────────────────
+// ── Token — memória + localStorage ───────────────────────────
+let _tokenCache = null;
 const Token = {
-  get: () => localStorage.getItem('az_token'),
-  set: (t) => localStorage.setItem('az_token', t),
-  del: () => { localStorage.removeItem('az_token'); localStorage.removeItem('az_user'); },
+  get: () => _tokenCache || localStorage.getItem('az_token'),
+  set: (t) => { _tokenCache = t; localStorage.setItem('az_token', t); },
+  del: () => { _tokenCache = null; localStorage.removeItem('az_token'); localStorage.removeItem('az_user'); },
 };
 
 // ── Fetch com token ──────────────────────────────────────────
@@ -407,7 +408,8 @@ async function modalElet() {
 
 // ── BOOT ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('login-form').addEventListener('submit', handleLogin);
+  const form = document.getElementById('login-form');
+  form.onsubmit = handleLogin; // onsubmit evita duplicação
   document.getElementById('btn-logout').addEventListener('click', logout);
   document.querySelectorAll('.nav-item').forEach(el =>
     el.addEventListener('click', () => navegar(el.dataset.tela))
