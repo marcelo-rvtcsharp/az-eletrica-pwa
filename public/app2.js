@@ -104,6 +104,8 @@ function renderMain() {
     case 'obras': renderObrasPage(main); break;
     case 'equipe': renderEquipePage(main); break;
     case 'apontamentos': renderApontamentos(main); break;
+    case 'financeiro': carregarFinanceiro(); break;
+    case 'folha': carregarFolha(); break;
   }
 }
 
@@ -482,7 +484,7 @@ function renderEquipePage(main) {
         </div>
       </td>
       <td><span class="badge ${fb[e.funcao] || ''}">${esc(e.funcao)}</span></td>
-      <td style="font-weight:500;color:var(--text-primary)">R$ ${fmtBR(e.valor_diaria)}</td>
+      <td style="font-weight:500;color:var(--text-primary)">${e.tipo_contrato === 'Mensalista' ? 'R$ ' + fmtBR(e.salario_fixo) + '<span style="font-size:11px;color:var(--text-muted)">/mês</span>' : 'R$ ' + fmtBR(e.valor_diaria)}</td>
       <td><span class="badge ${e.status === 'Ativo' ? 'b-g' : ''}">${esc(e.status)}</span></td>
       <td>
         <div style="display:flex;gap:4px;justify-content:flex-end">
@@ -503,7 +505,7 @@ function renderEquipePage(main) {
     <div class="content">
       <div class="table-card">
         <table>
-          <thead><tr><th>Membro</th><th>Função</th><th>Valor/dia</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Membro</th><th>Função</th><th>Valor/dia ou fixo</th><th>Status</th><th></th></tr></thead>
           <tbody>${linhas || '<tr><td colspan="5" class="empty">Nenhum cadastrado</td></tr>'}</tbody>
         </table>
       </div>
@@ -532,7 +534,7 @@ function abrirModalElet(id) {
         </div>
         <div class="form-grid2">
           <div class="field"><label>Tipo de contrato</label>
-            <select id="me-contrato">
+            <select id="me-contrato" onchange="document.getElementById('me-fixo-box').style.display=this.value==='Mensalista'?'':'none'">
               ${['Diarista','Mensalista','PJ'].map(t => `<option ${e?.tipo_contrato === t ? 'selected' : ''}>${t}</option>`).join('')}
             </select>
           </div>
@@ -541,6 +543,10 @@ function abrirModalElet(id) {
               ${['Ativo','Inativo','Afastado'].map(s => `<option ${e?.status === s ? 'selected' : ''}>${s}</option>`).join('')}
             </select>
           </div>
+        </div>
+        <div class="field" id="me-fixo-box" style="${e?.tipo_contrato === 'Mensalista' ? '' : 'display:none'}">
+          <label>Salário fixo mensal (R$) *</label><input id="me-fixo" type="number" step="0.01" value="${e?.salario_fixo || ''}" placeholder="5.500,00" />
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Na folha, mensalista recebe só o fixo + adicionais. A diária acima serve apenas para o custo das obras.</div>
         </div>
         <div class="form-grid2">
           <div class="field"><label>NR-10 válido até</label><input id="me-nr10" type="date" value="${e?.nr10_validade || ''}" /></div>
@@ -564,11 +570,15 @@ async function salvarElet(id) {
     funcao: document.getElementById('me-funcao').value,
     valor_diaria: parseFloat(document.getElementById('me-valor').value) || 0,
     tipo_contrato: document.getElementById('me-contrato').value,
+    salario_fixo: parseFloat(document.getElementById('me-fixo')?.value) || 0,
     status: document.getElementById('me-status').value,
     nr10_validade: document.getElementById('me-nr10').value || null,
     nr35_validade: document.getElementById('me-nr35').value || null,
   };
-  if (!data.nome || !data.valor_diaria) { toast('Preencha nome e valor da diária', 'erro'); return; }
+  if (!data.nome) { toast('Preencha o nome', 'erro'); return; }
+  if (data.tipo_contrato === 'Mensalista') {
+    if (!data.salario_fixo) { toast('Preencha o salário fixo do mensalista', 'erro'); return; }
+  } else if (!data.valor_diaria) { toast('Preencha o valor da diária', 'erro'); return; }
   try {
     if (id) {
       const u = await req('PUT', `/eletricistas/${id}`, data);
@@ -738,6 +748,268 @@ function renderEditorOrc(main) {
       </div>
     </div>`;
   document.getElementById('n-desc')?.addEventListener('keydown', e => { if (e.key === 'Enter') addItem(); });
+}
+
+// ── FINANCEIRO (adiantamentos, adicionais, descontos, empréstimos) ──
+const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const TIPO_LANC = {
+  adiantamento: { rot: 'Adiantamento', badge: 'b-a', sinal: '−' },
+  desconto:     { rot: 'Desconto',     badge: 'b-r', sinal: '−' },
+  adicional:    { rot: 'Adicional',    badge: 'b-g', sinal: '+' },
+};
+if (!S.finAno) { const h = new Date(); S.finAno = h.getFullYear(); S.finMes = h.getMonth() + 1; }
+
+function seletorMes(onchange) {
+  const anos = []; for (let a = new Date().getFullYear() + 1; a >= 2025; a--) anos.push(a);
+  return `<div style="display:flex;gap:6px;align-items:center">
+    <button class="btn" onclick="mudarMes(-1, '${onchange}')" title="Mês anterior"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+    <select class="inp-sm" style="width:auto;min-width:130px" onchange="S.finMes=+this.value;${onchange}()">${MESES.map((m, i) => `<option value="${i + 1}" ${S.finMes === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select>
+    <select class="inp-sm" style="width:auto;min-width:80px" onchange="S.finAno=+this.value;${onchange}()">${anos.map(a => `<option ${S.finAno === a ? 'selected' : ''}>${a}</option>`).join('')}</select>
+    <button class="btn" onclick="mudarMes(1, '${onchange}')" title="Próximo mês"><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
+  </div>`;
+}
+function mudarMes(delta, fn) {
+  let m = S.finMes + delta, a = S.finAno;
+  if (m < 1) { m = 12; a--; } if (m > 12) { m = 1; a++; }
+  S.finMes = m; S.finAno = a; window[fn]();
+}
+function opcoesFuncionarios(sel) {
+  return S.eletricistas.map(e => `<option value="${e.id}" ${e.id === sel ? 'selected' : ''}>${esc(e.nome)}</option>`).join('');
+}
+
+async function carregarFinanceiro() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'financeiro' || !main) return;
+  main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
+  try {
+    const [lancs, emps] = await Promise.all([
+      req('GET', `/financeiro/lancamentos?ano=${S.finAno}&mes=${S.finMes}`),
+      req('GET', '/financeiro/emprestimos'),
+    ]);
+    S.lancs = lancs || []; S.emps = emps || [];
+    renderFinanceiro(main);
+  } catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function renderFinanceiro(main) {
+  const tot = t => S.lancs.filter(l => l.tipo === t).reduce((a, l) => a + l.valor, 0);
+  const linhas = S.lancs.map(l => {
+    const t = TIPO_LANC[l.tipo] || { rot: l.tipo, badge: '', sinal: '' };
+    return `<tr>
+      <td>${fmtData(l.data)}</td>
+      <td style="font-weight:500;color:var(--text-primary)">${esc(l.eletricista_nome)}</td>
+      <td><span class="badge ${t.badge}">${t.rot}</span></td>
+      <td style="color:var(--text-muted)">${esc(l.descricao || '')}</td>
+      <td style="font-weight:500;text-align:right;white-space:nowrap">${t.sinal} R$ ${fmtBR(l.valor)}</td>
+      <td><div style="display:flex;gap:4px;justify-content:flex-end">
+        <button class="btn" onclick="abrirModalLanc(${l.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+        <button class="btn" onclick="excluirLanc(${l.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div></td></tr>`;
+  }).join('');
+
+  const emps = S.emps.map(e => {
+    const pct = Math.min(100, Math.round(e.pago_ate_hoje / e.valor_total * 100));
+    const ini = new Date(e.inicio + 'T12:00:00');
+    return `<div class="obra-item">
+      <div class="obra-dot" style="background:${e.quitado ? '#10b981' : '#f59e0b'}"></div>
+      <div class="obra-info">
+        <div class="obra-nome">${esc(e.eletricista_nome)} · ${esc(e.descricao)}</div>
+        <div class="obra-loc">R$ ${fmtBR(e.valor_parcela)}/mês desde ${MESES[ini.getMonth()].toLowerCase()}/${ini.getFullYear()} · total R$ ${fmtBR(e.valor_total)}</div>
+        <div class="prog"><div class="prog-fill" style="width:${pct}%;background:${e.quitado ? '#10b981' : '#f59e0b'}"></div></div>
+      </div>
+      <div class="obra-saldo">
+        <div class="obra-val" style="color:${e.quitado ? '#15803d' : '#a16207'}">${e.quitado ? 'Quitado' : 'Falta R$ ' + fmtBR(e.restante)}</div>
+        <div class="obra-pct">${e.quitado ? '' : e.parcelas_restantes + ' parcela(s)'}</div>
+      </div>
+      <div style="display:flex;gap:4px;margin-left:8px">
+        <button class="btn" onclick="abrirModalEmp(${e.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+        <button class="btn" onclick="excluirEmp(${e.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div>
+    </div>`;
+  }).join('') || '<p class="empty">Nenhum empréstimo cadastrado</p>';
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Financeiro da equipe</div><div class="topbar-sub">Adiantamentos, adicionais, descontos e empréstimos</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="abrirModalEmp()"><i class="ti ti-moneybag" aria-hidden="true"></i> Novo empréstimo</button>
+        <button class="btn btn-p" onclick="abrirModalLanc()"><i class="ti ti-plus" aria-hidden="true"></i> Novo lançamento</button>
+      </div>
+    </div>
+    <div class="content">
+      <div style="margin-bottom:14px">${seletorMes('carregarFinanceiro')}</div>
+      <div class="metrics">
+        <div class="metric"><div class="metric-ico amber"><i class="ti ti-cash" aria-hidden="true"></i></div><div class="metric-label">Adiantamentos</div><div class="metric-val">R$ ${fmtBR(tot('adiantamento'))}</div><div class="metric-sub">${MESES[S.finMes - 1]}/${S.finAno}</div></div>
+        <div class="metric"><div class="metric-ico green"><i class="ti ti-plus" aria-hidden="true"></i></div><div class="metric-label">Adicionais</div><div class="metric-val">R$ ${fmtBR(tot('adicional'))}</div><div class="metric-sub">pagos a mais no mês</div></div>
+        <div class="metric"><div class="metric-ico red"><i class="ti ti-minus" aria-hidden="true"></i></div><div class="metric-label">Descontos</div><div class="metric-val">R$ ${fmtBR(tot('desconto'))}</div><div class="metric-sub">avulsos no mês</div></div>
+        <div class="metric"><div class="metric-ico blue"><i class="ti ti-moneybag" aria-hidden="true"></i></div><div class="metric-label">Empréstimos em aberto</div><div class="metric-val">R$ ${fmtBR(S.emps.reduce((a, e) => a + e.restante, 0))}</div><div class="metric-sub">${S.emps.filter(e => !e.quitado).length} ativo(s)</div></div>
+      </div>
+      <div class="table-card" style="margin-bottom:16px">
+        <table>
+          <thead><tr><th>Data</th><th>Funcionário</th><th>Tipo</th><th>Descrição</th><th style="text-align:right">Valor</th><th></th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="6" class="empty">Nenhum lançamento neste mês</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title"><i class="ti ti-moneybag" aria-hidden="true"></i> Empréstimos parcelados (descontados todo mês na folha)</span></div>
+        ${emps}
+      </div>
+    </div>`;
+}
+
+function abrirModalLanc(id) {
+  const l = id ? S.lancs.find(x => x.id === id) : null;
+  const hoje = new Date();
+  const dataPadrao = (S.finAno === hoje.getFullYear() && S.finMes === hoje.getMonth() + 1)
+    ? hoje.toISOString().slice(0, 10)
+    : `${S.finAno}-${String(S.finMes).padStart(2, '0')}-01`;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${l ? 'Editar lançamento' : 'Novo lançamento'}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Funcionário *</label><select id="ml-elet">${opcoesFuncionarios(l?.eletricista_id)}</select></div>
+        <div class="form-grid2">
+          <div class="field"><label>Tipo *</label>
+            <select id="ml-tipo">${Object.entries(TIPO_LANC).map(([k, t]) => `<option value="${k}" ${l?.tipo === k ? 'selected' : ''}>${t.rot} (${t.sinal})</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Valor (R$) *</label><input id="ml-valor" type="number" step="0.01" value="${l?.valor || ''}" placeholder="0,00" /></div>
+        </div>
+        <div class="field"><label>Data * <span style="font-weight:400;color:var(--text-muted)">(o mês desta data define a folha)</span></label><input id="ml-data" type="date" value="${l?.data || dataPadrao}" /></div>
+        <div class="field"><label>Descrição</label><input id="ml-desc" value="${esc(l?.descricao || '')}" placeholder="Ex: Vale, Pix adiantado, gratificação..." /></div>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarLanc(${l?.id || 'null'})">${l ? 'Salvar' : 'Lançar'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function salvarLanc(id) {
+  const data = {
+    eletricista_id: +document.getElementById('ml-elet').value,
+    tipo: document.getElementById('ml-tipo').value,
+    valor: parseFloat(document.getElementById('ml-valor').value) || 0,
+    data: document.getElementById('ml-data').value,
+    descricao: document.getElementById('ml-desc').value.trim() || null,
+  };
+  if (!data.eletricista_id || !data.valor || !data.data) { toast('Preencha funcionário, valor e data', 'erro'); return; }
+  try {
+    await req(id ? 'PUT' : 'POST', id ? `/financeiro/lancamentos/${id}` : '/financeiro/lancamentos', data);
+    fecharModal(); toast(id ? 'Lançamento atualizado!' : 'Lançamento salvo!');
+    const d = new Date(data.data + 'T12:00:00'); S.finAno = d.getFullYear(); S.finMes = d.getMonth() + 1;
+    carregarFinanceiro();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirLanc(id) {
+  if (!confirm('Excluir este lançamento?')) return;
+  try { await req('DELETE', `/financeiro/lancamentos/${id}`); toast('Excluído!'); carregarFinanceiro(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+function abrirModalEmp(id) {
+  const e = id ? S.emps.find(x => x.id === id) : null;
+  const mesPadrao = e ? e.inicio.slice(0, 7) : `${S.finAno}-${String(S.finMes).padStart(2, '0')}`;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${e ? 'Editar empréstimo' : 'Novo empréstimo'}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Funcionário *</label><select id="mp-elet">${opcoesFuncionarios(e?.eletricista_id)}</select></div>
+        <div class="field"><label>Descrição *</label><input id="mp-desc" value="${esc(e?.descricao || '')}" placeholder="Ex: Moto, Empréstimo pessoal" /></div>
+        <div class="form-grid2">
+          <div class="field"><label>Valor total (R$) *</label><input id="mp-total" type="number" step="0.01" value="${e?.valor_total || ''}" placeholder="5.000,00" /></div>
+          <div class="field"><label>Parcela por mês (R$) *</label><input id="mp-parcela" type="number" step="0.01" value="${e?.valor_parcela || ''}" placeholder="500,00" /></div>
+        </div>
+        <div class="field"><label>Primeira parcela na folha de *</label><input id="mp-inicio" type="month" value="${mesPadrao}" /></div>
+        <div class="field"><label>Observação</label><input id="mp-obs" value="${esc(e?.observacao || '')}" /></div>
+        <p style="font-size:12px;color:var(--text-muted);margin:4px 0 0">A parcela é descontada automaticamente na folha de cada mês até completar o valor total.</p>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarEmp(${e?.id || 'null'})">${e ? 'Salvar' : 'Cadastrar'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function salvarEmp(id) {
+  const ini = document.getElementById('mp-inicio').value;
+  const data = {
+    eletricista_id: +document.getElementById('mp-elet').value,
+    descricao: document.getElementById('mp-desc').value.trim(),
+    valor_total: parseFloat(document.getElementById('mp-total').value) || 0,
+    valor_parcela: parseFloat(document.getElementById('mp-parcela').value) || 0,
+    inicio: ini ? ini + '-01' : '',
+    observacao: document.getElementById('mp-obs').value.trim() || null,
+  };
+  if (!data.eletricista_id || !data.descricao || !data.valor_total || !data.valor_parcela || !data.inicio) { toast('Preencha todos os campos com *', 'erro'); return; }
+  try {
+    await req(id ? 'PUT' : 'POST', id ? `/financeiro/emprestimos/${id}` : '/financeiro/emprestimos', data);
+    fecharModal(); toast(id ? 'Empréstimo atualizado!' : 'Empréstimo cadastrado!'); carregarFinanceiro();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirEmp(id) {
+  if (!confirm('Excluir este empréstimo? As parcelas deixam de ser descontadas em todas as folhas.')) return;
+  try { await req('DELETE', `/financeiro/emprestimos/${id}`); toast('Excluído!'); carregarFinanceiro(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+// ── FOLHA MENSAL ──────────────────────────────────────────────
+async function carregarFolha() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'folha' || !main) return;
+  main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Calculando folha...</p></div>';
+  try {
+    S.folha = await req('GET', `/financeiro/folha?ano=${S.finAno}&mes=${S.finMes}`);
+    renderFolha(main);
+  } catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function renderFolha(main) {
+  const f = S.folha || { linhas: [], totais: {} };
+  const t = f.totais || {};
+  const neg = v => v ? `<span style="color:#b91c1c">− ${fmtBR(v)}</span>` : '<span style="color:var(--text-muted)">—</span>';
+  const linhas = f.linhas.map(l => `
+    <tr>
+      <td><div style="font-weight:500;color:var(--text-primary)">${esc(l.nome)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${l.tipo_contrato === 'Mensalista' ? 'Mensalista' : l.dias + ' dia(s) apontado(s)'}</div></td>
+      <td style="text-align:right">${l.tipo_contrato === 'Mensalista' ? fmtBR(l.salario_fixo) + ' <span class="badge" style="font-size:10px">fixo</span>' : fmtBR(l.valor_diarias)}</td>
+      <td style="text-align:right">${l.adicionais ? '+ ' + fmtBR(l.adicionais) : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td style="text-align:right;font-weight:500">${fmtBR(l.bruto)}</td>
+      <td style="text-align:right">${neg(l.adiantamentos)}</td>
+      <td style="text-align:right">${neg(l.descontos)}</td>
+      <td style="text-align:right" title="${esc(l.parcelas_detalhe.join(' | '))}">${neg(l.parcelas)}</td>
+      <td style="text-align:right;font-weight:600;color:${l.a_receber < 0 ? '#b91c1c' : 'var(--text-primary)'}">R$ ${fmtBR(l.a_receber)}</td>
+    </tr>`).join('');
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Folha mensal</div><div class="topbar-sub">${MESES[S.finMes - 1]} de ${S.finAno} · ${f.linhas.length} funcionário(s)</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="navegar('financeiro')"><i class="ti ti-cash" aria-hidden="true"></i> Lançar adiantamento</button>
+        <button class="btn btn-p" onclick="window.print()"><i class="ti ti-printer" aria-hidden="true"></i> Imprimir</button>
+      </div>
+    </div>
+    <div class="content">
+      <div style="margin-bottom:14px">${seletorMes('carregarFolha')}</div>
+      <div class="metrics">
+        <div class="metric"><div class="metric-ico blue"><i class="ti ti-report-money" aria-hidden="true"></i></div><div class="metric-label">Total bruto</div><div class="metric-val">R$ ${fmtBR(t.bruto)}</div><div class="metric-sub">diárias + fixos + adicionais</div></div>
+        <div class="metric"><div class="metric-ico amber"><i class="ti ti-cash" aria-hidden="true"></i></div><div class="metric-label">Adiantamentos</div><div class="metric-val">R$ ${fmtBR(t.adiantamentos)}</div><div class="metric-sub">já pagos no mês</div></div>
+        <div class="metric"><div class="metric-ico red"><i class="ti ti-moneybag" aria-hidden="true"></i></div><div class="metric-label">Descontos + parcelas</div><div class="metric-val">R$ ${fmtBR((t.descontos || 0) + (t.parcelas || 0))}</div><div class="metric-sub">empréstimos e avulsos</div></div>
+        <div class="metric"><div class="metric-ico green"><i class="ti ti-wallet" aria-hidden="true"></i></div><div class="metric-label">A pagar</div><div class="metric-val" style="color:#15803d">R$ ${fmtBR(t.a_receber)}</div><div class="metric-sub">valor final a receber</div></div>
+      </div>
+      <div class="table-card" style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Funcionário</th><th style="text-align:right">Diárias / Fixo</th><th style="text-align:right">Adicionais</th><th style="text-align:right">Bruto</th><th style="text-align:right">Adiant.</th><th style="text-align:right">Descontos</th><th style="text-align:right">Parcelas</th><th style="text-align:right">A receber</th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="8" class="empty">Nenhum movimento neste mês</td></tr>'}</tbody>
+          ${f.linhas.length ? `<tfoot><tr style="font-weight:600;border-top:2px solid var(--border, #e5e7eb)">
+            <td>TOTAL</td><td style="text-align:right">${fmtBR((t.valor_diarias || 0) + (t.salario_fixo || 0))}</td><td style="text-align:right">${fmtBR(t.adicionais)}</td>
+            <td style="text-align:right">${fmtBR(t.bruto)}</td><td style="text-align:right">${fmtBR(t.adiantamentos)}</td><td style="text-align:right">${fmtBR(t.descontos)}</td>
+            <td style="text-align:right">${fmtBR(t.parcelas)}</td><td style="text-align:right">R$ ${fmtBR(t.a_receber)}</td></tr></tfoot>` : ''}
+        </table>
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Mensalistas recebem só o fixo + adicionais (diárias lançadas para eles servem apenas para o custo das obras). Passe o mouse em "Parcelas" para ver o detalhe dos empréstimos.</p>
+    </div>`;
 }
 
 function fecharModal() { document.getElementById('modal-root').innerHTML = ''; }
