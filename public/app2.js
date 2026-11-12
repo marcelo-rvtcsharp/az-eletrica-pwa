@@ -1,4 +1,4 @@
-const API = 'https://web-production-a606c.up.railway.app';
+const API = 'https://az-eletrica-backend.onrender.com';
 window._TOKEN = localStorage.getItem('az_token') || null;
 
 const Token = {
@@ -450,7 +450,7 @@ async function salvarObra(id) {
 }
 
 async function excluirObra(id, nome) {
-  if (!confirm(`Excluir a obra "${nome}"?\nTodos os apontamentos desta obra serão mantidos.`)) return;
+  if (!confirm(`Excluir a obra "${nome}"?\nOs apontamentos lançados nesta obra também serão excluídos.`)) return;
   try {
     await req('DELETE', `/obras/${id}`);
     S.obras = S.obras.filter(o => o.id !== id);
@@ -461,9 +461,13 @@ async function excluirObra(id, nome) {
 async function zerarObras() {
   if (!confirm('Excluir TODAS as obras? Esta ação não pode ser desfeita.')) return;
   try {
-    await Promise.all(S.obras.map(o => req('DELETE', `/obras/${o.id}`)));
-    S.obras = []; toast('Obras zeradas!'); renderMain();
+    for (const o of [...S.obras]) {
+      await req('DELETE', `/obras/${o.id}`);
+      S.obras = S.obras.filter(x => x.id !== o.id);
+    }
+    toast('Obras zeradas!');
   } catch (err) { toast(err.message, 'erro'); }
+  renderMain();
 }
 
 // ── EQUIPE ────────────────────────────────────────────────────
@@ -579,7 +583,7 @@ async function salvarElet(id) {
 }
 
 async function excluirElet(id, nome) {
-  if (!confirm(`Excluir "${nome}" da equipe?`)) return;
+  if (!confirm(`Excluir "${nome}" da equipe?\nTodos os apontamentos dessa pessoa também serão excluídos.`)) return;
   try {
     await req('DELETE', `/eletricistas/${id}`);
     S.eletricistas = S.eletricistas.filter(e => e.id !== id);
@@ -590,9 +594,13 @@ async function excluirElet(id, nome) {
 async function zerarEquipe() {
   if (!confirm('Excluir TODOS os membros da equipe? Esta ação não pode ser desfeita.')) return;
   try {
-    await Promise.all(S.eletricistas.map(e => req('DELETE', `/eletricistas/${e.id}`)));
-    S.eletricistas = []; toast('Equipe zerada!'); renderMain();
+    for (const e of [...S.eletricistas]) {
+      await req('DELETE', `/eletricistas/${e.id}`);
+      S.eletricistas = S.eletricistas.filter(x => x.id !== e.id);
+    }
+    toast('Equipe zerada!');
   } catch (err) { toast(err.message, 'erro'); }
+  renderMain();
 }
 
 // ── ORÇAMENTOS ────────────────────────────────────────────────
