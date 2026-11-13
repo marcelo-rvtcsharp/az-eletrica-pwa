@@ -67,6 +67,8 @@ async function handleLogin(e) {
 function iniciarApp() {
   const u = JSON.parse(localStorage.getItem('az_user') || '{}');
   document.getElementById('usuario-nome').textContent = u.nome || '';
+  const mh = document.getElementById('mh-user'); if (mh) mh.textContent = u.nome || '';
+  montarNavMobile();
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   navegar('dashboard');
@@ -90,9 +92,51 @@ function navegar(tela) {
   document.querySelectorAll('.nav-item').forEach(el =>
     el.classList.toggle('active', el.dataset.tela === tela)
   );
+  atualizarNavMobile(); fecharMais();
+  document.getElementById('main')?.scrollTo(0, 0);
   if (tela === 'dashboard') { carregarDash(); return; }   // sempre busca números atualizados
   renderMain();
 }
+
+// ── Navegação no celular: barra inferior + menu "Mais" ────────
+const NAV_PRINCIPAL = ['dashboard', 'apontamentos', 'obras', 'folha'];
+const NAV_CURTO = { dashboard: 'Início', apontamentos: 'Apontar', orcamentos: 'Orçamentos' };
+function itensNav() {
+  return [...document.querySelectorAll('.sidebar .nav-item')].map(el => ({
+    tela: el.dataset.tela, nome: el.querySelector('span')?.textContent || el.dataset.tela,
+    ico: (el.querySelector('i')?.className || 'ti ti-circle'),
+  }));
+}
+function montarNavMobile() {
+  const itens = itensNav();
+  const bn = document.getElementById('bottom-nav');
+  if (bn) bn.innerHTML = itens.filter(i => NAV_PRINCIPAL.includes(i.tela)).map(i =>
+    `<button class="bn-item" data-tela="${i.tela}" onclick="navegar('${i.tela}')"><i class="${i.ico}" aria-hidden="true"></i><span>${NAV_CURTO[i.tela] || i.nome}</span></button>`).join('') +
+    `<button class="bn-item" data-tela="_mais" onclick="abrirMais()"><i class="ti ti-menu-2" aria-hidden="true"></i><span>Mais</span></button>`;
+  const g = document.getElementById('mais-grid');
+  if (g) g.innerHTML = itens.map(i =>
+    `<button class="mais-item" data-tela="${i.tela}" onclick="navegar('${i.tela}')"><i class="${i.ico}" aria-hidden="true"></i>${i.nome}</button>`).join('') +
+    `<button class="mais-item" onclick="logout()"><i class="ti ti-logout" aria-hidden="true"></i>Sair</button>`;
+  atualizarNavMobile();
+}
+function atualizarNavMobile() {
+  const principal = NAV_PRINCIPAL.includes(S.tela);
+  document.querySelectorAll('.bn-item').forEach(b => b.classList.toggle('active', b.dataset.tela === S.tela || (b.dataset.tela === '_mais' && !principal)));
+  document.querySelectorAll('.mais-item').forEach(b => b.classList.toggle('active', b.dataset.tela === S.tela));
+}
+function abrirMais() { document.getElementById('mais-sheet')?.classList.add('open'); }
+function fecharMais() { document.getElementById('mais-sheet')?.classList.remove('open'); }
+
+// ── Botões que só têm ícone ganham o nome escrito ao lado ─────
+function rotularBotoes(raiz) {
+  (raiz || document).querySelectorAll('button.btn[title]').forEach(b => {
+    if (b.dataset.rot || b.textContent.trim()) return;
+    b.dataset.rot = '1';
+    const sp = document.createElement('span'); sp.className = 'btn-lbl'; sp.textContent = b.title;
+    b.appendChild(sp);
+  });
+}
+new MutationObserver(() => rotularBotoes()).observe(document.documentElement, { childList: true, subtree: true });
 
 function renderMain() {
   const main = document.getElementById('main');
@@ -569,7 +613,7 @@ function renderEquipePage(main) {
     </div>
     <div class="content">
       <div class="table-card">
-        <table>
+        <table class="tbl-cards">
           <thead><tr><th>Membro</th><th>Função</th><th>Valor/dia ou fixo</th><th>Status</th><th></th></tr></thead>
           <tbody>${linhas || '<tr><td colspan="5" class="empty">Nenhum cadastrado</td></tr>'}</tbody>
         </table>
@@ -827,10 +871,10 @@ if (!S.finAno) { const h = new Date(); S.finAno = h.getFullYear(); S.finMes = h.
 function seletorMes(onchange) {
   const anos = []; for (let a = new Date().getFullYear() + 1; a >= 2025; a--) anos.push(a);
   return `<div style="display:flex;gap:6px;align-items:center">
-    <button class="btn" onclick="mudarMes(-1, '${onchange}')" title="Mês anterior"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+    <button class="btn" onclick="mudarMes(-1, '${onchange}')" aria-label="Mês anterior"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
     <select class="inp-sm" style="width:auto;min-width:130px" onchange="S.finMes=+this.value;${onchange}()">${MESES.map((m, i) => `<option value="${i + 1}" ${S.finMes === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select>
     <select class="inp-sm" style="width:auto;min-width:80px" onchange="S.finAno=+this.value;${onchange}()">${anos.map(a => `<option ${S.finAno === a ? 'selected' : ''}>${a}</option>`).join('')}</select>
-    <button class="btn" onclick="mudarMes(1, '${onchange}')" title="Próximo mês"><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
+    <button class="btn" onclick="mudarMes(1, '${onchange}')" aria-label="Próximo mês"><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
   </div>`;
 }
 function mudarMes(delta, fn) {
@@ -910,7 +954,7 @@ function renderFinanceiro(main) {
         <div class="metric"><div class="metric-ico blue"><i class="ti ti-moneybag" aria-hidden="true"></i></div><div class="metric-label">Empréstimos em aberto</div><div class="metric-val">R$ ${fmtBR(S.emps.reduce((a, e) => a + e.restante, 0))}</div><div class="metric-sub">${S.emps.filter(e => !e.quitado).length} ativo(s)</div></div>
       </div>
       <div class="table-card" style="margin-bottom:16px">
-        <table>
+        <table class="tbl-cards">
           <thead><tr><th>Data</th><th>Funcionário</th><th>Tipo</th><th>Descrição</th><th style="text-align:right">Valor</th><th></th></tr></thead>
           <tbody>${linhas || '<tr><td colspan="6" class="empty">Nenhum lançamento neste mês</td></tr>'}</tbody>
         </table>
@@ -1139,7 +1183,7 @@ function renderDespesas(main) {
       </div>
       <div class="row2">
         <div class="table-card" style="overflow-x:auto">
-          <table>
+          <table class="tbl-cards">
             <thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th style="text-align:right">Valor</th><th></th></tr></thead>
             <tbody>${linhas || '<tr><td colspan="5" class="empty">Nenhuma despesa neste mês. Use "Calcular alimentação" para gerar pelos apontamentos.</td></tr>'}</tbody>
           </table>
@@ -1260,7 +1304,7 @@ function renderFerramentas(main) {
     return `<tr>
       <td><div style="font-weight:500;color:var(--text-primary)">${esc(f.nome)}</div>
         ${f.observacao ? `<div style="font-size:11px;color:var(--text-muted)">${esc(f.observacao)}</div>` : ''}</td>
-      <td style="text-align:center;font-weight:600">${f.quantidade_total}</td>
+      <td style="text-align:center;font-weight:600">${f.quantidade_total}<span class="so-mobile"> un.</span></td>
       <td>${chips || '<span style="color:var(--text-muted)">—</span>'}</td>
       <td><div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">
         <button class="btn btn-p" onclick="abrirModalMover(${f.id})" title="Mover"><i class="ti ti-arrows-exchange" aria-hidden="true"></i> Mover</button>
@@ -1290,7 +1334,7 @@ function renderFerramentas(main) {
         <select onchange="S.ferrFiltro=this.value;renderFerramentas(document.getElementById('main'))" style="min-width:220px;padding:8px;border:1px solid var(--border,#d1d5db);border-radius:8px">${opcoesFiltro}</select>
       </div>
       <div class="table-card" style="overflow-x:auto">
-        <table>
+        <table class="tbl-cards">
           <thead><tr><th>Ferramenta</th><th style="text-align:center">Qtd</th><th>Onde está</th><th></th></tr></thead>
           <tbody>${linhas || `<tr><td colspan="4" class="empty">${(S.ferr || []).length ? 'Nenhuma ferramenta neste filtro' : 'Nenhuma ferramenta cadastrada. Clique em "Nova ferramenta".'}</td></tr>`}</tbody>
         </table>

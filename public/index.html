@@ -2,12 +2,12 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#1a3a5c" />
   <title>AZ Elétrica</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" />
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=4" />
 </head>
 <body>
 
@@ -25,6 +25,10 @@
 
 <div id="app" style="display:none">
   <div class="layout">
+    <header class="mobile-header">
+      <div><span class="sl-az">AZ</span> <span class="sl-sub">Elétrica</span><span class="mh-user" id="mh-user"></span></div>
+      <button class="btn-logout" onclick="logout()"><i class="ti ti-logout" aria-hidden="true"></i> Sair</button>
+    </header>
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-logo"><span class="sl-az">AZ</span><span class="sl-sub">Elétrica</span></div>
@@ -47,10 +51,15 @@
   </div>
 </div>
 
+<nav class="bottom-nav" id="bottom-nav"></nav>
+<div class="mais-sheet" id="mais-sheet" onclick="if(event.target===this)fecharMais()">
+  <div class="mais-box"><div class="mais-titulo">Menu</div><div class="mais-grid" id="mais-grid"></div></div>
+</div>
+
 <div id="modal-root"></div>
 <div id="toast" class="toast"></div>
 
 <script src="/sw-register.js"></script>
-<script src="/app2.js"></script>
+<script src="/app2.js?v=4"></script>
 </body>
 </html>
