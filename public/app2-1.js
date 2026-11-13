@@ -1,0 +1,1576 @@
+const API = 'https://az-eletrica-backend.onrender.com';
+window._TOKEN = localStorage.getItem('az_token') || null;
+
+const Token = {
+  get: () => window._TOKEN,
+  set: (t) => { window._TOKEN = t; localStorage.setItem('az_token', t); },
+  del: () => { window._TOKEN = null; localStorage.removeItem('az_token'); localStorage.removeItem('az_user'); },
+};
+
+async function req(method, path, body) {
+  const token = window._TOKEN;
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(API + path, {
+    method, headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) { logout(); return null; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.detail || 'Erro ' + res.status); }
+  return res.json();
+}
+
+function fmtBR(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtData(s) { if (!s) return '—'; return new Date(s + 'T12:00:00').toLocaleDateString('pt-BR'); }
+function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function toast(msg, tipo) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (tipo === 'erro' ? ' erro' : '');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+const S = { tela: 'dashboard', orc: null, obras: [], eletricistas: [], orcamentos: [], dash: null, finAno: new Date().getFullYear(), finMes: new Date().getMonth() + 1 };
+
+function mostrarLogin() {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+function logout() { Token.del(); mostrarLogin(); }
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const email = document.getElementById('login-email').value.trim();
+  const senha = document.getElementById('login-senha').value.trim();
+  const btn = document.getElementById('btn-login');
+  btn.textContent = 'Entrando...'; btn.disabled = true;
+  try {
+    const res = await fetch(API + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'username=' + encodeURIComponent(email) + '&password=' + encodeURIComponent(senha),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.access_token) throw new Error(data.detail || 'Email ou senha incorretos');
+    Token.set(data.access_token);
+    localStorage.setItem('az_user', JSON.stringify(data.usuario));
+    iniciarApp();
+  } catch (err) {
+    toast(err.message, 'erro');
+  } finally {
+    btn.textContent = 'Entrar'; btn.disabled = false;
+  }
+}
+
+function iniciarApp() {
+  const u = JSON.parse(localStorage.getItem('az_user') || '{}');
+  document.getElementById('usuario-nome').textContent = u.nome || '';
+  const mh = document.getElementById('mh-user'); if (mh) mh.textContent = u.nome || '';
+  montarNavMobile();
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  navegar('dashboard');
+  carregarDados();
+}
+
+async function carregarDados() {
+  try {
+    const [obras, elet, orcs] = await Promise.all([
+      req('GET', '/obras/'), req('GET', '/eletricistas/'), req('GET', '/orcamentos/'),
+    ]);
+    if (!obras) return;
+    S.obras = obras || []; S.eletricistas = elet || [];
+    S.orcamentos = orcs || [];
+    if (S.tela !== 'dashboard') renderMain();   // o dashboard busca os próprios dados
+  } catch (err) { toast('Erro ao carregar: ' + err.message, 'erro'); }
+}
+
+function navegar(tela) {
+  S.tela = tela; S.orc = null;
+  document.querySelectorAll('.nav-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.tela === tela)
+  );
+  atualizarNavMobile(); fecharMais();
+  document.getElementById('main')?.scrollTo(0, 0);
+  if (tela === 'dashboard') { carregarDash(); return; }   // sempre busca números atualizados
+  renderMain();
+}
+
+// ── Navegação no celular: barra inferior + menu "Mais" ────────
+const NAV_PRINCIPAL = ['dashboard', 'apontamentos', 'obras', 'folha'];
+const NAV_CURTO = { dashboard: 'Início', apontamentos: 'Apontar', orcamentos: 'Orçamentos' };
+function itensNav() {
+  return [...document.querySelectorAll('.sidebar .nav-item')].map(el => ({
+    tela: el.dataset.tela, nome: el.querySelector('span')?.textContent || el.dataset.tela,
+    ico: (el.querySelector('i')?.className || 'ti ti-circle'),
+  }));
+}
+function montarNavMobile() {
+  const itens = itensNav();
+  const bn = document.getElementById('bottom-nav');
+  if (bn) bn.innerHTML = itens.filter(i => NAV_PRINCIPAL.includes(i.tela)).map(i =>
+    `<button class="bn-item" data-tela="${i.tela}" onclick="navegar('${i.tela}')"><i class="${i.ico}" aria-hidden="true"></i><span>${NAV_CURTO[i.tela] || i.nome}</span></button>`).join('') +
+    `<button class="bn-item" data-tela="_mais" onclick="abrirMais()"><i class="ti ti-menu-2" aria-hidden="true"></i><span>Mais</span></button>`;
+  const g = document.getElementById('mais-grid');
+  if (g) g.innerHTML = itens.map(i =>
+    `<button class="mais-item" data-tela="${i.tela}" onclick="navegar('${i.tela}')"><i class="${i.ico}" aria-hidden="true"></i>${i.nome}</button>`).join('') +
+    `<button class="mais-item" onclick="logout()"><i class="ti ti-logout" aria-hidden="true"></i>Sair</button>`;
+  atualizarNavMobile();
+}
+function atualizarNavMobile() {
+  const principal = NAV_PRINCIPAL.includes(S.tela);
+  document.querySelectorAll('.bn-item').forEach(b => b.classList.toggle('active', b.dataset.tela === S.tela || (b.dataset.tela === '_mais' && !principal)));
+  document.querySelectorAll('.mais-item').forEach(b => b.classList.toggle('active', b.dataset.tela === S.tela));
+}
+function abrirMais() { document.getElementById('mais-sheet')?.classList.add('open'); }
+function fecharMais() { document.getElementById('mais-sheet')?.classList.remove('open'); }
+
+// ── Botões que só têm ícone ganham o nome escrito ao lado ─────
+function rotularBotoes(raiz) {
+  (raiz || document).querySelectorAll('button.btn[title]').forEach(b => {
+    if (b.dataset.rot || b.textContent.trim()) return;
+    b.dataset.rot = '1';
+    const sp = document.createElement('span'); sp.className = 'btn-lbl'; sp.textContent = b.title;
+    b.appendChild(sp);
+  });
+}
+new MutationObserver(() => rotularBotoes()).observe(document.documentElement, { childList: true, subtree: true });
+
+function renderMain() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  if (S.orc) { renderEditorOrc(main); return; }
+  switch (S.tela) {
+    case 'dashboard': renderDash(main); break;
+    case 'orcamentos': renderOrcs(main); break;
+    case 'obras': renderObrasPage(main); break;
+    case 'equipe': renderEquipePage(main); break;
+    case 'apontamentos': renderApontamentos(main); break;
+    case 'financeiro': carregarFinanceiro(); break;
+    case 'folha': carregarFolha(); break;
+    case 'despesas': carregarDespesas(); break;
+    case 'ferramentas': carregarFerramentas(); break;
+  }
+}
+
+// ── DASHBOARD ────────────────────────────────────────────────
+function renderDash(main) {
+  const d = S.dash;
+  if (!d) { main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>'; return; }
+  const m = d.mes || {};
+  const c = d.custos || {};
+  const per = d.periodo || { ano: S.finAno, mes: S.finMes };
+  const nomeMes = `${MESES[per.mes - 1]} de ${per.ano}`;
+  const corSit = s => s === 'negativo' ? ['#ef4444', '#b91c1c'] : s === 'atencao' ? ['#f59e0b', '#a16207'] : ['#10b981', '#15803d'];
+
+  let varTxt = 'sem lançamentos no mês anterior';
+  if (m.total_mes_anterior) {
+    const v = (m.total_diarias - m.total_mes_anterior) / m.total_mes_anterior * 100;
+    varTxt = `${v >= 0 ? '▲' : '▼'} ${Math.abs(v).toFixed(0)}% vs mês anterior (R$ ${fmtBR(m.total_mes_anterior)})`;
+  }
+
+  const maxObra = Math.max(1, ...(d.obras_mes || []).map(o => o.gasto_mes));
+  const obrasMesHTML = (d.obras_mes || []).map((o, i) => {
+    const [cor, corTxt] = corSit(o.situacao);
+    const contrato = o.valor_contratado > 0
+      ? `contrato: ${o.percentual}% consumido · saldo <b style="color:${corTxt}">R$ ${fmtBR(o.saldo)}</b>`
+      : `<span style="color:#b91c1c">sem contrato · total gasto R$ ${fmtBR(o.total_gasto)}</span>`;
+    return `<div class="obra-item">
+      <div style="width:22px;font-size:12px;color:var(--text-muted);font-weight:600">${i + 1}º</div>
+      <div class="obra-info">
+        <div class="obra-nome">${esc(o.nome)}</div>
+        <div class="obra-loc">${contrato}</div>
+        <div class="prog"><div class="prog-fill" style="width:${o.gasto_mes / maxObra * 100}%;background:#1d4ed8"></div></div>
+      </div>
+      <div class="obra-saldo">
+        <div class="obra-val">R$ ${fmtBR(o.gasto_mes)}</div>
+        <div class="obra-pct">${o.perc_do_mes}% do mês</div>
+      </div>
+    </div>`;
+  }).join('') || '<p class="empty">Nenhum lançamento neste mês</p>';
+
+  const maxF = Math.max(1, ...(d.funcionarios_mes || []).map(f => f.valor));
+  const funcHTML = (d.funcionarios_mes || []).map(f => `
+    <div class="apto-item link-cal" onclick="abrirCalendarioPorNome('${esc(f.nome)}')" title="Ver dias trabalhados">
+      <div class="av" style="background:#dbeafe;color:#1d4ed8">${esc(f.nome.replace(/^ENC\./, '').slice(0, 2).toUpperCase())}</div>
+      <div class="apto-info" style="flex:1">
+        <div class="apto-nome">${esc(f.nome)}</div>
+        <div class="prog" style="margin-top:4px"><div class="prog-fill" style="width:${f.valor / maxF * 100}%;background:#f59e0b"></div></div>
+      </div>
+      <div class="apto-r"><div class="apto-val">R$ ${fmtBR(f.valor)}</div><div class="apto-data">${f.dias} dia(s) · ${f.perc_do_mes}%</div></div>
+    </div>`).join('') || '<p class="empty">Nenhum lançamento neste mês</p>';
+
+  const geralHTML = (d.obras?.lista || []).filter(o => o.valor_contratado > 0).map(o => {
+    const [cor, corTxt] = corSit(o.situacao);
+    return `<div class="obra-item">
+      <div class="obra-dot" style="background:${cor}"></div>
+      <div class="obra-info">
+        <div class="obra-nome">${esc(o.nome)}</div>
+        <div class="obra-loc">contrato R$ ${fmtBR(o.valor_contratado)} · gasto R$ ${fmtBR(o.total_gasto)}</div>
+        <div class="prog"><div class="prog-fill" style="width:${Math.min(o.percentual, 100)}%;background:${cor}"></div></div>
+      </div>
+      <div class="obra-saldo">
+        <div class="obra-val" style="color:${corTxt}">${o.saldo >= 0 ? '+' : ''} R$ ${fmtBR(o.saldo)}</div>
+        <div class="obra-pct">${o.percentual}% consumido</div>
+      </div>
+    </div>`;
+  }).join('') || '<p class="empty">Nenhuma obra com contrato</p>';
+
+  const ultHTML = (d.ultimos_apontamentos || []).slice(0, 8).map(a => `
+    <div class="apto-item">
+      <div class="av" style="background:#dbeafe;color:#1d4ed8">${esc((a.eletricista || '?').replace(/^ENC\./, '').slice(0, 2).toUpperCase())}</div>
+      <div class="apto-info"><div class="apto-nome">${esc(a.eletricista)}</div><div class="apto-obra">${esc(a.obra)}</div></div>
+      <div class="apto-r"><div class="apto-val">R$ ${fmtBR(a.valor)}</div><div class="apto-data">${fmtData(a.data)}</div></div>
+    </div>`).join('') || '<p class="empty">Nenhum apontamento neste mês</p>';
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Dashboard</div><div class="topbar-sub">${nomeMes}${per.mes_atual ? ' · mês atual' : ''}</div></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="carregarDados();carregarDash()"><i class="ti ti-refresh" aria-hidden="true"></i> Atualizar</button>
+        <button class="btn btn-p" onclick="navegar('apontamentos')"><i class="ti ti-plus" aria-hidden="true"></i> Apontar diária</button>
+      </div>
+    </div>
+    <div class="content">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+        ${seletorMes('carregarDash')}
+        ${per.mes_atual ? '' : '<button class="btn" onclick="irMesAtual()"><i class="ti ti-calendar" aria-hidden="true"></i> Mês atual</button>'}
+      </div>
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-ico blue"><i class="ti ti-currency-real" aria-hidden="true"></i></div>
+          <div class="metric-label">Mão de obra no mês</div>
+          <div class="metric-val">R$ ${fmtBR(m.total_diarias)}</div>
+          <div class="metric-sub">${varTxt}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-ico amber"><i class="ti ti-tools-kitchen-2" aria-hidden="true"></i></div>
+          <div class="metric-label">Alimentação + outros custos</div>
+          <div class="metric-val">R$ ${fmtBR((c.alimentacao || 0) + (c.outros || 0))}</div>
+          <div class="metric-sub">alimentação R$ ${fmtBR(c.alimentacao)} · outros R$ ${fmtBR(c.outros)}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-ico green"><i class="ti ti-sum" aria-hidden="true"></i></div>
+          <div class="metric-label">Custo total do mês</div>
+          <div class="metric-val">R$ ${fmtBR(c.total)}</div>
+          <div class="metric-sub">${m.lancamentos || 0} diárias em ${m.dias_com_lancamento || 0} dia(s) · ${m.funcionarios || 0} pessoa(s)</div>
+        </div>
+        <div class="metric">
+          <div class="metric-ico red"><i class="ti ti-alert-triangle" aria-hidden="true"></i></div>
+          <div class="metric-label">Saldo geral dos contratos</div>
+          <div class="metric-val" style="color:${(d.obras?.saldo_geral || 0) >= 0 ? '#15803d' : '#b91c1c'}">R$ ${fmtBR(d.obras?.saldo_geral)}</div>
+          <div class="metric-sub">${d.obras?.negativas || 0} estourada(s) · ${d.obras?.atencao || 0} em atenção · ${d.obras?.sem_contrato || 0} sem contrato</div>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="card">
+          <div class="card-header"><span class="card-title"><i class="ti ti-building-factory-2" aria-hidden="true"></i> Gasto por obra · ${MESES[per.mes - 1]}</span></div>
+          ${obrasMesHTML}
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title"><i class="ti ti-users" aria-hidden="true"></i> Gasto por funcionário · ${MESES[per.mes - 1]}</span></div>
+          ${funcHTML}
+        </div>
+      </div>
+      <div class="row2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-header"><span class="card-title"><i class="ti ti-chart-bar" aria-hidden="true"></i> Contratos (acumulado até hoje)</span></div>
+          ${geralHTML}
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title"><i class="ti ti-clock-check" aria-hidden="true"></i> Últimos apontamentos · ${MESES[per.mes - 1]}</span></div>
+          ${ultHTML}
+        </div>
+      </div>
+    </div>`;
+}
+
+async function carregarDash() {
+  if (S.tela !== 'dashboard') return;
+  S.dash = null; renderMain();
+  try { S.dash = await req('GET', `/dashboard/?ano=${S.finAno}&mes=${S.finMes}`); renderMain(); }
+  catch (err) { toast('Erro ao carregar: ' + err.message, 'erro'); }
+}
+function irMesAtual() { const h = new Date(); S.finAno = h.getFullYear(); S.finMes = h.getMonth() + 1; carregarDash(); }
+
+// ── APONTAMENTOS ─────────────────────────────────────────────
+function renderApontamentos(main) {
+  const elets = S.eletricistas.filter(e => e.status === 'Ativo');
+  const obras = S.obras.filter(o => o.status === 'Em andamento');
+  const hoje = new Date().toISOString().slice(0, 10);
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Novo apontamento</div><div class="topbar-sub">Lance diárias por eletricista e obra</div></div>
+      <button class="btn" onclick="navegar('dashboard')"><i class="ti ti-arrow-left" aria-hidden="true"></i> Voltar</button>
+    </div>
+    <div class="content">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:16px"><i class="ti ti-clock-check" aria-hidden="true"></i> Dados do apontamento</div>
+        <div class="form-grid2">
+          <div class="field">
+            <label>Eletricista *</label>
+            <select id="ap-elet">
+              <option value="">Selecione...</option>
+              ${elets.map(e => `<option value="${e.id}" data-valor="${e.valor_diaria}">${esc(e.nome)} (R$ ${fmtBR(e.valor_diaria)}/dia)</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label>Data *</label>
+            <input type="date" id="ap-data" value="${hoje}" />
+          </div>
+        </div>
+        <div class="field" style="margin-top:12px">
+          <label>Observação (opcional)</label>
+          <input type="text" id="ap-obs" placeholder="Ex: serviço pesado, chuva..." />
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title"><i class="ti ti-building-factory-2" aria-hidden="true"></i> Obras do dia</span>
+          <button class="btn btn-p" onclick="addObraLinha()"><i class="ti ti-plus" aria-hidden="true"></i> Adicionar obra</button>
+        </div>
+        <div id="obras-linhas">
+          ${gerarLinhaObra(obras, 0)}
+        </div>
+        <div id="preview-total" style="margin-top:12px;padding:12px;background:var(--surface-1);border-radius:8px;display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:13px;color:var(--text-secondary)">Total do dia</span>
+          <span style="font-size:18px;font-weight:500;color:var(--text-primary)" id="total-dia">R$ 0,00</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px"><i class="ti ti-bolt" aria-hidden="true"></i> Adicionais</div>
+        <div id="adicionais-linhas"></div>
+        <button class="btn" style="margin-top:8px" onclick="addAdicionalLinha()"><i class="ti ti-plus" aria-hidden="true"></i> Adicionar adicional</button>
+      </div>
+
+      <button class="btn btn-p" style="width:100%;padding:12px;font-size:14px;justify-content:center" onclick="salvarApontamento()">
+        <i class="ti ti-device-floppy" aria-hidden="true"></i> Salvar apontamento
+      </button>
+    </div>`;
+
+  document.getElementById('ap-elet').addEventListener('change', recalcTotal);
+}
+
+let _obraCount = 1;
+let _adCount = 0;
+
+function gerarLinhaObra(obras, idx) {
+  return `<div class="linha-obra" id="lo-${idx}" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+    <select class="lo-obra" style="flex:1" onchange="recalcTotal()">
+      <option value="">Selecione a obra...</option>
+      ${obras.map(o => `<option value="${o.id}">${esc(o.nome)} — ${esc(o.cidade || '')}</option>`).join('')}
+    </select>
+    <input class="lo-valor" type="number" placeholder="R$ valor" step="0.01" style="width:110px" oninput="recalcTotal()" />
+    <button class="btn" onclick="removerLinha('lo-${idx}')" title="Remover"><i class="ti ti-trash" aria-hidden="true"></i></button>
+  </div>`;
+}
+
+function addObraLinha() {
+  const obras = S.obras.filter(o => o.status === 'Em andamento');
+  const cont = document.getElementById('obras-linhas');
+  const div = document.createElement('div');
+  div.innerHTML = gerarLinhaObra(obras, _obraCount++);
+  cont.appendChild(div.firstElementChild);
+}
+
+function addAdicionalLinha() {
+  const cont = document.getElementById('adicionais-linhas');
+  const idx = _adCount++;
+  const div = document.createElement('div');
+  div.id = 'ad-' + idx;
+  div.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px';
+  div.innerHTML = `
+    <select class="ad-tipo" style="width:160px">
+      <option value="sabado_feriado">Sábado/Feriado</option>
+      <option value="semana_pesada">Semana pesada</option>
+      <option value="hora_extra">Hora extra</option>
+      <option value="outro">Outro</option>
+    </select>
+    <input class="ad-desc" type="text" placeholder="Descrição" style="flex:1" />
+    <input class="ad-valor" type="number" placeholder="R$ valor" step="0.01" style="width:110px" oninput="recalcTotal()" />
+    <button class="btn" onclick="removerLinha('ad-${idx}')" title="Remover"><i class="ti ti-trash" aria-hidden="true"></i></button>`;
+  cont.appendChild(div);
+}
+
+function removerLinha(id) {
+  document.getElementById(id)?.remove();
+  recalcTotal();
+}
+
+function recalcTotal() {
+  let total = 0;
+  document.querySelectorAll('.lo-valor').forEach(i => { total += parseFloat(i.value) || 0; });
+  document.querySelectorAll('.ad-valor').forEach(i => { total += parseFloat(i.value) || 0; });
+  const el = document.getElementById('total-dia');
+  if (el) el.textContent = 'R$ ' + fmtBR(total);
+}
+
+async function salvarApontamento() {
+  const elet_id = parseInt(document.getElementById('ap-elet').value);
+  const data = document.getElementById('ap-data').value;
+  const obs = document.getElementById('ap-obs').value;
+  if (!elet_id || !data) { toast('Selecione o eletricista e a data', 'erro'); return; }
+
+  const itens = [];
+  document.querySelectorAll('.linha-obra').forEach(row => {
+    const obra_id = parseInt(row.querySelector('.lo-obra').value);
+    const valor = parseFloat(row.querySelector('.lo-valor').value);
+    if (obra_id && valor > 0) itens.push({ obra_id, valor });
+  });
+  if (itens.length === 0) { toast('Adicione pelo menos uma obra', 'erro'); return; }
+
+  const adicionais = [];
+  document.querySelectorAll('[id^="ad-"]').forEach(row => {
+    const tipo = row.querySelector('.ad-tipo')?.value;
+    const desc = row.querySelector('.ad-desc')?.value;
+    const valor = parseFloat(row.querySelector('.ad-valor')?.value);
+    if (tipo && desc && valor > 0) adicionais.push({ tipo, descricao: desc, valor });
+  });
+
+  try {
+    await req('POST', '/apontamentos/', { eletricista_id: elet_id, data, observacao: obs, itens, adicionais });
+    toast('Apontamento salvo!');
+    _obraCount = 1; _adCount = 0;
+    navegar('dashboard');
+    carregarDados();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+// ── OBRAS ────────────────────────────────────────────────────
+function renderObrasPage(main) {
+  const cards = S.obras.map(o => {
+    const cor = o.situacao === 'negativo' ? '#ef4444' : o.situacao === 'atencao' ? '#f59e0b' : '#10b981';
+    const corTxt = o.situacao === 'negativo' ? '#b91c1c' : o.situacao === 'atencao' ? '#a16207' : '#15803d';
+    const bc = o.situacao === 'negativo' ? 'b-r' : o.situacao === 'atencao' ? 'b-a' : 'b-g';
+    const lb = o.situacao === 'negativo' ? 'Negativa' : o.situacao === 'atencao' ? 'Atenção' : 'Em dia';
+    return `<div class="obra-card">
+      <div class="obra-card-top">
+        <div class="obra-card-header">
+          <div class="obra-card-nome">${esc(o.nome)}</div>
+          <span class="badge ${bc}">${lb}</span>
+        </div>
+        <div class="obra-card-loc"><i class="ti ti-map-pin" aria-hidden="true"></i> ${esc(o.cidade || '')} · ${esc(o.cliente)}</div>
+      </div>
+      <div class="obra-fin">
+        <div class="fin-row"><span class="fin-label">Contratado</span><span class="fin-val">R$ ${fmtBR(o.valor_contratado)}</span></div>
+        <div class="fin-row"><span class="fin-label">Gasto em diárias</span><span class="fin-val">R$ ${fmtBR(o.total_gasto)}</span></div>
+        <div class="fin-row"><span class="fin-label">Saldo</span><span class="fin-val" style="color:${corTxt}">R$ ${fmtBR(o.saldo)}</span></div>
+        <div class="prog" style="margin-top:8px"><div class="prog-fill" style="width:${Math.min(o.percentual_consumido || 0, 100)}%;background:${cor}"></div></div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:3px">${o.percentual_consumido || 0}% consumido</div>
+      </div>
+      <div class="obra-card-footer">
+        <span style="font-size:11px;color:var(--text-muted)">${esc(o.tipo_servico || '')}</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn" onclick="editarObra(${o.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+          <button class="btn" onclick="excluirObra(${o.id}, '${esc(o.nome)}')" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+        </div>
+      </div>
+    </div>`;
+  }).join('') || '<p class="empty">Nenhuma obra cadastrada</p>';
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Obras</div><div class="topbar-sub">${S.obras.length} cadastradas</div></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="zerarObras()" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i> Zerar obras</button>
+        <button class="btn btn-p" onclick="abrirModalObra()"><i class="ti ti-plus" aria-hidden="true"></i> Nova obra</button>
+      </div>
+    </div>
+    <div class="content"><div class="obras-grid">${cards}</div></div>`;
+}
+
+function abrirModalObra(id) {
+  const o = id ? S.obras.find(x => x.id === id) : null;
+  const titulo = o ? 'Editar obra' : 'Nova obra';
+  const html = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${titulo}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Nome da obra *</label><input id="m-nome" value="${esc(o?.nome || '')}" placeholder="Ex: Residência João Silva" /></div>
+        <div class="form-grid2">
+          <div class="field"><label>Cliente *</label><input id="m-cliente" value="${esc(o?.cliente || '')}" placeholder="Nome do cliente" /></div>
+          <div class="field"><label>Contato</label><input id="m-contato" value="${esc(o?.contato || '')}" placeholder="(88) 9 0000-0000" /></div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Cidade *</label><input id="m-cidade" value="${esc(o?.cidade || '')}" placeholder="Ex: Amontada" /></div>
+          <div class="field"><label>Bairro</label><input id="m-bairro" value="${esc(o?.bairro || '')}" placeholder="Ex: Centro" /></div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Valor contratado (R$) *</label><input id="m-valor" type="number" value="${o?.valor_contratado || ''}" placeholder="0,00" /></div>
+          <div class="field"><label>Tipo de serviço</label>
+            <select id="m-tipo">
+              ${['Elétrica residencial','Elétrica comercial','Elétrica industrial','SPDA / Para-raios','Iluminação pública','Outro'].map(t => `<option ${o?.tipo_servico === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Início</label><input id="m-inicio" type="date" value="${o?.data_inicio || ''}" /></div>
+          <div class="field"><label>Previsão de término</label><input id="m-prev" type="date" value="${o?.data_previsao || ''}" /></div>
+        </div>
+        <div class="field"><label>Observações</label><textarea id="m-obs" placeholder="Ex: Inclui fornecimento de material...">${esc(o?.observacoes || '')}</textarea></div>
+        <div class="field"><label>Alerta de consumo (%)</label>
+          <select id="m-alerta">
+            <option ${o?.alerta_percentual === 70 ? 'selected' : ''} value="70">70% — Aviso antecipado</option>
+            <option ${(!o || o?.alerta_percentual === 85) ? 'selected' : ''} value="85">85% — Padrão</option>
+            <option ${o?.alerta_percentual === 95 ? 'selected' : ''} value="95">95% — Somente crítico</option>
+          </select>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarObra(${o?.id || 'null'})">${o ? 'Salvar alterações' : 'Cadastrar obra'}</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('modal-root').innerHTML = html;
+}
+
+function editarObra(id) { abrirModalObra(id); }
+
+async function salvarObra(id) {
+  const data = {
+    nome: document.getElementById('m-nome').value,
+    cliente: document.getElementById('m-cliente').value,
+    contato: document.getElementById('m-contato').value,
+    cidade: document.getElementById('m-cidade').value,
+    bairro: document.getElementById('m-bairro').value,
+    valor_contratado: parseFloat(document.getElementById('m-valor').value) || 0,
+    tipo_servico: document.getElementById('m-tipo').value,
+    data_inicio: document.getElementById('m-inicio').value || null,
+    data_previsao: document.getElementById('m-prev').value || null,
+    observacoes: document.getElementById('m-obs').value,
+    alerta_percentual: parseInt(document.getElementById('m-alerta').value),
+    status: 'Em andamento',
+  };
+  if (!data.nome || !data.cliente || !data.valor_contratado) { toast('Preencha os campos obrigatórios', 'erro'); return; }
+  try {
+    if (id) {
+      const u = await req('PUT', `/obras/${id}`, data);
+      S.obras = S.obras.map(o => o.id === id ? u : o);
+    } else {
+      const nova = await req('POST', '/obras/', data);
+      S.obras = [nova, ...S.obras];
+    }
+    fecharModal(); toast(id ? 'Obra atualizada!' : 'Obra cadastrada!');
+    renderMain();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirObra(id, nome) {
+  if (!confirm(`Excluir a obra "${nome}"?\nOs apontamentos lançados nesta obra também serão excluídos.`)) return;
+  try {
+    await req('DELETE', `/obras/${id}`);
+    S.obras = S.obras.filter(o => o.id !== id);
+    toast('Obra excluída!'); renderMain();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function zerarObras() {
+  if (!confirm('Excluir TODAS as obras? Esta ação não pode ser desfeita.')) return;
+  try {
+    for (const o of [...S.obras]) {
+      await req('DELETE', `/obras/${o.id}`);
+      S.obras = S.obras.filter(x => x.id !== o.id);
+    }
+    toast('Obras zeradas!');
+  } catch (err) { toast(err.message, 'erro'); }
+  renderMain();
+}
+
+// ── EQUIPE ────────────────────────────────────────────────────
+function renderEquipePage(main) {
+  const fb = { Encarregado: 'b-a', Eletricista: 'b-g', Auxiliar: '' };
+  const linhas = S.eletricistas.map(e => `
+    <tr style="${e.status !== 'Ativo' ? 'opacity:.55' : ''}">
+      <td>
+        <div class="elet-cell">
+          <div class="av" style="background:#dbeafe;color:#1d4ed8">${e.nome.slice(0, 2).toUpperCase()}</div>
+          <div class="link-cal" onclick="abrirCalendario(${e.id})" title="Ver dias trabalhados"><div style="font-size:13px;font-weight:500;color:var(--text-primary)">${esc(e.nome)} <i class="ti ti-calendar-event" aria-hidden="true" style="color:#9aa5b4;font-size:13px"></i></div><div style="font-size:11px;color:var(--text-muted)">${esc(e.telefone || '')}</div></div>
+        </div>
+      </td>
+      <td><span class="badge ${fb[e.funcao] || ''}">${esc(e.funcao)}</span></td>
+      <td style="font-weight:500;color:var(--text-primary)">${e.tipo_contrato === 'Mensalista' ? 'R$ ' + fmtBR(e.salario_fixo) + '<span style="font-size:11px;color:var(--text-muted)">/mês</span>' : 'R$ ' + fmtBR(e.valor_diaria)}</td>
+      <td><span class="badge ${e.status === 'Ativo' ? 'b-g' : ''}">${esc(e.status)}</span></td>
+      <td>
+        <div style="display:flex;gap:4px;justify-content:flex-end">
+          <button class="btn" onclick="abrirCalendario(${e.id})" title="Dias"><i class="ti ti-calendar-event" aria-hidden="true"></i></button>
+          <button class="btn" onclick="editarElet(${e.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+          <button class="btn" onclick="excluirElet(${e.id}, '${esc(e.nome)}')" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+        </div>
+      </td>
+    </tr>`).join('');
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Equipe</div><div class="topbar-sub">${S.eletricistas.length} cadastrados · ${S.eletricistas.filter(e => e.status === 'Ativo').length} ativos</div></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="zerarEquipe()" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i> Zerar equipe</button>
+        <button class="btn btn-p" onclick="abrirModalElet()"><i class="ti ti-plus" aria-hidden="true"></i> Novo membro</button>
+      </div>
+    </div>
+    <div class="content">
+      <div class="table-card">
+        <table class="tbl-cards">
+          <thead><tr><th>Membro</th><th>Função</th><th>Valor/dia ou fixo</th><th>Status</th><th></th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="5" class="empty">Nenhum cadastrado</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function abrirModalElet(id) {
+  const e = id ? S.eletricistas.find(x => x.id === id) : null;
+  const titulo = e ? 'Editar membro' : 'Novo membro';
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${titulo}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Nome completo *</label><input id="me-nome" value="${esc(e?.nome || '')}" placeholder="Ex: João Lima Junior" /></div>
+        <div class="form-grid2">
+          <div class="field"><label>Telefone / WhatsApp</label><input id="me-tel" value="${esc(e?.telefone || '')}" placeholder="(88) 9 0000-0000" /></div>
+          <div class="field"><label>CPF</label><input id="me-cpf" value="${esc(e?.cpf || '')}" placeholder="000.000.000-00" /></div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Função *</label>
+            <select id="me-funcao">
+              ${['Encarregado','Eletricista','Auxiliar','Estagiário'].map(f => `<option ${e?.funcao === f ? 'selected' : ''}>${f}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Valor da diária (R$) *</label><input id="me-valor" type="number" value="${e?.valor_diaria || ''}" placeholder="200,00" /></div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Tipo de contrato</label>
+            <select id="me-contrato" onchange="document.getElementById('me-fixo-box').style.display=this.value==='Mensalista'?'':'none'">
+              ${['Diarista','Mensalista','PJ'].map(t => `<option ${e?.tipo_contrato === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Status</label>
+            <select id="me-status">
+              ${['Ativo','Inativo','Afastado'].map(s => `<option ${e?.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field" id="me-fixo-box" style="${e?.tipo_contrato === 'Mensalista' ? '' : 'display:none'}">
+          <label>Salário fixo mensal (R$) *</label><input id="me-fixo" type="number" step="0.01" value="${e?.salario_fixo || ''}" placeholder="5.500,00" />
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Na folha, mensalista recebe só o fixo + adicionais. A diária acima serve apenas para o custo das obras.</div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>NR-10 válido até</label><input id="me-nr10" type="date" value="${e?.nr10_validade || ''}" /></div>
+          <div class="field"><label>NR-35 válido até</label><input id="me-nr35" type="date" value="${e?.nr35_validade || ''}" /></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarElet(${e?.id || 'null'})">${e ? 'Salvar alterações' : 'Cadastrar membro'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function editarElet(id) { abrirModalElet(id); }
+
+async function salvarElet(id) {
+  const data = {
+    nome: document.getElementById('me-nome').value,
+    telefone: document.getElementById('me-tel').value,
+    cpf: document.getElementById('me-cpf').value,
+    funcao: document.getElementById('me-funcao').value,
+    valor_diaria: parseFloat(document.getElementById('me-valor').value) || 0,
+    tipo_contrato: document.getElementById('me-contrato').value,
+    salario_fixo: parseFloat(document.getElementById('me-fixo')?.value) || 0,
+    status: document.getElementById('me-status').value,
+    nr10_validade: document.getElementById('me-nr10').value || null,
+    nr35_validade: document.getElementById('me-nr35').value || null,
+  };
+  if (!data.nome) { toast('Preencha o nome', 'erro'); return; }
+  if (data.tipo_contrato === 'Mensalista') {
+    if (!data.salario_fixo) { toast('Preencha o salário fixo do mensalista', 'erro'); return; }
+  } else if (!data.valor_diaria) { toast('Preencha o valor da diária', 'erro'); return; }
+  try {
+    if (id) {
+      const u = await req('PUT', `/eletricistas/${id}`, data);
+      S.eletricistas = S.eletricistas.map(e => e.id === id ? u : e);
+    } else {
+      const novo = await req('POST', '/eletricistas/', data);
+      S.eletricistas = [...S.eletricistas, novo];
+    }
+    fecharModal(); toast(id ? 'Membro atualizado!' : 'Membro cadastrado!');
+    renderMain();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirElet(id, nome) {
+  if (!confirm(`Excluir "${nome}" da equipe?\nTodos os apontamentos dessa pessoa também serão excluídos.`)) return;
+  try {
+    await req('DELETE', `/eletricistas/${id}`);
+    S.eletricistas = S.eletricistas.filter(e => e.id !== id);
+    toast('Membro excluído!'); renderMain();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function zerarEquipe() {
+  if (!confirm('Excluir TODOS os membros da equipe? Esta ação não pode ser desfeita.')) return;
+  try {
+    for (const e of [...S.eletricistas]) {
+      await req('DELETE', `/eletricistas/${e.id}`);
+      S.eletricistas = S.eletricistas.filter(x => x.id !== e.id);
+    }
+    toast('Equipe zerada!');
+  } catch (err) { toast(err.message, 'erro'); }
+  renderMain();
+}
+
+// ── ORÇAMENTOS ────────────────────────────────────────────────
+function renderOrcs(main) {
+  const bc = { Rascunho: 'bs-r', Enviado: 'bs-e', Aprovado: 'bs-a', Reprovado: 'bs-rep' };
+  const total = S.orcamentos.reduce((a, o) => a + (o.total || 0), 0);
+  const aprov = S.orcamentos.filter(o => o.status === 'Aprovado').reduce((a, o) => a + o.total, 0);
+  const env = S.orcamentos.filter(o => o.status === 'Enviado').reduce((a, o) => a + o.total, 0);
+  const rasc = S.orcamentos.filter(o => o.status === 'Rascunho').length;
+
+  const linhas = S.orcamentos.map(o => `
+    <tr onclick="abrirOrc(${o.id})" style="cursor:pointer">
+      <td data-label="Nº" style="font-size:11px;color:var(--text-muted);font-family:monospace">${esc(o.numero || '')}</td>
+      <td class="td-titulo" style="font-size:13px;font-weight:500;color:var(--text-primary)">${esc(o.cliente_nome || '—')}</td>
+      <td data-label="Obra" style="font-size:11px;color:var(--text-muted)">${esc(o.obra_descricao || '—')}</td>
+      <td data-label="Data" style="font-size:11px;color:var(--text-muted)">${fmtData(o.data)}</td>
+      <td data-label="Total" class="td-destaque" style="text-align:right;font-size:13px;font-weight:500">R$ ${fmtBR(o.total)}</td>
+      <td data-label="Status"><span class="badge ${bc[o.status] || ''}">${o.status}</span></td>
+      <td class="td-acoes">
+        <div style="display:flex;gap:4px;justify-content:flex-end">
+          <button class="btn" onclick="event.stopPropagation();dupOrc(${o.id})" title="Duplicar"><i class="ti ti-copy" aria-hidden="true"></i></button>
+          <button class="btn" onclick="event.stopPropagation();pdfOrc(${o.id})" title="PDF"><i class="ti ti-file-download" aria-hidden="true"></i></button>
+          <button class="btn" onclick="event.stopPropagation();delOrc(${o.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+        </div>
+      </td>
+    </tr>`).join('');
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Orçamentos</div><div class="topbar-sub">${S.orcamentos.length} orçamentos</div></div>
+      <button class="btn btn-p" onclick="novoOrc()"><i class="ti ti-plus" aria-hidden="true"></i> Novo orçamento</button>
+    </div>
+    <div class="content">
+      <div class="metrics">
+        <div class="metric"><div class="metric-label">Total orçado</div><div class="metric-val">R$ ${fmtBR(total)}</div></div>
+        <div class="metric"><div class="metric-label">Aprovados</div><div class="metric-val" style="color:#15803d">R$ ${fmtBR(aprov)}</div></div>
+        <div class="metric"><div class="metric-label">Aguardando</div><div class="metric-val" style="color:#1d4ed8">R$ ${fmtBR(env)}</div></div>
+        <div class="metric"><div class="metric-label">Rascunhos</div><div class="metric-val" style="color:var(--text-muted)">${rasc}</div></div>
+      </div>
+      <div class="table-card">
+        <table class="tbl-lista">
+          <thead><tr><th>Nº</th><th>Cliente</th><th>Obra</th><th>Data</th><th style="text-align:right">Total</th><th>Status</th><th></th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="7" class="empty">Nenhum orçamento</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function novoOrc() {
+  try {
+    const o = await req('POST', '/orcamentos/', { data: new Date().toISOString().slice(0, 10), status: 'Rascunho', itens: [] });
+    S.orcamentos = [o, ...S.orcamentos]; S.orc = o; renderMain();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+function abrirOrc(id) { S.orc = S.orcamentos.find(o => o.id === id) || null; renderMain(); }
+function fecharOrc() { S.orc = null; carregarDados(); }
+
+function totalOrc() { return (S.orc?.itens || []).reduce((a, it) => a + (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0), 0); }
+function updOrcCampo(f, v) { S.orc = { ...S.orc, [f]: v }; atualizarTotalFixo(); }
+function updOrcCliente(f, v) { S.orc = { ...S.orc, [f]: v }; if (f === 'cliente_nome') { const el = document.querySelector('.editor-titulo'); if (el) el.textContent = v || 'Novo orçamento'; } }
+function updItem(i, f, v) { const itens = [...S.orc.itens]; itens[i] = { ...itens[i], [f]: v }; S.orc = { ...S.orc, itens }; atualizarTotalFixo(); const c = document.getElementById('chip-' + i); if (c) { const vt = (parseFloat(itens[i].qtd) || 0) * (parseFloat(itens[i].vunit) || 0); c.textContent = 'R$ ' + fmtBR(vt); } }
+function delItem(i) { S.orc = { ...S.orc, itens: S.orc.itens.filter((_, x) => x !== i) }; renderMain(); }
+function addItem() { const desc = (document.getElementById('n-desc')?.value || '').trim(); const und = document.getElementById('n-und')?.value || 'UND'; const qtd = parseFloat(document.getElementById('n-qtd')?.value) || 0; const vunit = parseFloat(document.getElementById('n-vunit')?.value) || 0; if (!desc) { toast('Preencha a descrição', 'erro'); return; } S.orc = { ...S.orc, itens: [...S.orc.itens, { descricao: desc, und, qtd, vunit }] }; renderMain(); }
+function atualizarTotalFixo() { const t = totalOrc(); const el = document.querySelector('.total-fixo-valor'); if (el) el.textContent = 'R$ ' + fmtBR(t); const tv = document.querySelector('.tv'); if (tv) tv.textContent = 'R$ ' + fmtBR(t); }
+function prevItem() { const qtd = parseFloat(document.getElementById('n-qtd')?.value) || 0; const vunit = parseFloat(document.getElementById('n-vunit')?.value) || 0; const prev = qtd * vunit; const bar = document.getElementById('preview-bar'); if (!bar) return; if (prev > 0) { const tot = totalOrc() + prev; bar.innerHTML = `<div class="preview-bar"><span style="color:var(--text-muted);font-size:12px">Este item:</span><span style="font-weight:500;color:#1d4ed8;font-size:12px;flex:1;margin-left:6px">+ R$ ${fmtBR(prev)}</span><span style="font-size:12px;color:var(--text-muted)">→ Total:</span><span style="font-weight:500;color:var(--text-primary);font-size:12px;margin-left:6px">R$ ${fmtBR(tot)}</span></div>`; } else bar.innerHTML = ''; }
+
+async function salvarOrc() {
+  const o = S.orc; if (!o) return;
+  try {
+    const u = await req('PUT', `/orcamentos/${o.id}`, { cliente_nome: o.cliente_nome, cliente_cnpj: o.cliente_cnpj, cliente_endereco: o.cliente_endereco, obra_descricao: o.obra_descricao, data: o.data, validade: parseInt(o.validade) || 10, status: o.status, obs: o.obs, itens: (o.itens || []).map((it, i) => ({ descricao: it.descricao, und: it.und, qtd: parseFloat(it.qtd) || 0, vunit: parseFloat(it.vunit) || 0, ordem: i })) });
+    S.orc = u; S.orcamentos = S.orcamentos.map(x => x.id === u.id ? u : x); toast('Salvo!'); renderMain();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function dupOrc(id) { const o = S.orcamentos.find(x => x.id === id); if (!o) return; try { const c = await req('POST', '/orcamentos/', { cliente_nome: (o.cliente_nome || '') + ' (cópia)', cliente_cnpj: o.cliente_cnpj, cliente_endereco: o.cliente_endereco, obra_descricao: o.obra_descricao, data: new Date().toISOString().slice(0, 10), validade: o.validade, status: 'Rascunho', obs: o.obs, itens: (o.itens || []).map((it, i) => ({ descricao: it.descricao, und: it.und, qtd: it.qtd, vunit: it.vunit, ordem: i })) }); S.orcamentos = [c, ...S.orcamentos]; S.orc = c; toast('Duplicado!'); renderMain(); } catch (err) { toast(err.message, 'erro'); } }
+async function delOrc(id) { if (!confirm('Excluir este orçamento?')) return; try { await req('DELETE', `/orcamentos/${id}`); S.orcamentos = S.orcamentos.filter(o => o.id !== id); if (S.orc?.id === id) S.orc = null; toast('Excluído!'); renderMain(); } catch (err) { toast(err.message, 'erro'); } }
+function pdfOrc(id) { const o = S.orcamentos.find(x => x.id === id) || S.orc; if (o) imprimirPDF(o); }
+
+function imprimirPDF(orc) {
+  const total = (orc.itens || []).reduce((a, it) => a + (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0), 0);
+  const linhas = (orc.itens || []).map((it, i) => { const vt = (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0); return `<tr style="background:${i % 2 === 0 ? '#fff' : '#f5f7f5'}"><td style="text-align:center;padding:5px">${String(i + 1).padStart(2, '0')}</td><td style="padding:5px">${esc(it.descricao)}</td><td style="text-align:center;padding:5px">${esc(it.und)}</td><td style="text-align:right;padding:5px">${fmtBR(it.qtd)}</td><td style="text-align:right;padding:5px">${fmtBR(it.vunit)}</td><td style="text-align:right;padding:5px;font-weight:700;color:#1a3a5c">${fmtBR(vt)}</td></tr>`; }).join('');
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:10px}.h{background:#1a3a5c;padding:14px 20px;display:flex;justify-content:space-between}.en{color:#f5a623;font-size:20px;font-weight:bold}.ei{color:#aac;font-size:8px;margin-top:4px}.no{color:rgba(245,166,35,.7);font-size:9px;text-align:right}.no strong{color:#f5a623;font-size:13px;display:block}.cb{padding:10px 20px;border-bottom:1px solid #ddd}.cn{font-size:11px;font-weight:bold}.ob{font-size:10px;font-weight:bold;color:#0e4e64;margin-top:6px}table{width:calc(100% - 40px);margin:10px 20px 0;border-collapse:collapse;font-size:9px}thead tr{background:#1a3a5c}thead th{color:#f5a623;font-weight:bold;padding:6px 5px;font-size:8px;text-transform:uppercase}td{border-bottom:1px solid #eee}.tb{background:#0f2d4a;margin:0 20px;padding:8px 10px;display:flex;justify-content:space-between}.tl{color:rgba(245,166,35,.7);font-size:9px;font-weight:bold}.tv{color:#f5a623;font-size:15px;font-weight:bold}.obs{background:#FFF9C4;margin:10px 20px;padding:8px;font-size:8.5px;color:#504000;white-space:pre-line}.ass{margin:20px 20px 0;border-top:1px solid #888;width:180px;padding-top:4px;font-size:8px;color:#888}.rod{text-align:center;font-size:7px;color:#bbb;margin-top:20px;padding-bottom:10px}</style></head><body>
+<div class="h"><div><div class="en">AZ ELÉTRICA</div><div class="ei">Fone (88)98161-0318 · Elderazevedo22@hotmail.com · CNPJ: 63.824.949/0001-26</div></div><div class="no"><strong>${esc(orc.numero || orc.id)}</strong>Data: ${fmtData(orc.data)}</div></div>
+<div class="cb"><div class="cn">${esc(orc.cliente_nome || '—')}${orc.cliente_cnpj ? ' — CNPJ: ' + esc(orc.cliente_cnpj) : ''}</div>${orc.cliente_endereco ? `<div style="font-size:9px;color:#555">Endereço: ${esc(orc.cliente_endereco)}</div>` : ''}${orc.obra_descricao ? `<div class="ob">Objeto: ${esc(orc.obra_descricao)}</div>` : ''}</div>
+<table><thead><tr><th style="width:28px">Nº</th><th>Descrição</th><th style="width:52px;text-align:center">UND</th><th style="width:40px;text-align:right">Qtd</th><th style="width:70px;text-align:right">Vl unit</th><th style="width:75px;text-align:right">Vl total</th></tr></thead><tbody>${linhas}</tbody></table>
+<div class="tb"><span class="tl">VALOR TOTAL</span><span class="tv">R$ ${fmtBR(total)}</span></div>
+<div class="obs">OBS: Orçamento válido por ${orc.validade || 10} dias. — Amontada – CE, ${fmtData(orc.data)}${orc.obs ? '\n' + orc.obs : ''}</div>
+<div class="ass">Assinatura / AZ Elétrica</div>
+<div class="rod">Documento gerado por AZ Elétrica</div>
+</body></html>`;
+  const w = window.open('', '_blank'); w.document.write(html); w.document.close(); w.onload = () => w.print();
+}
+
+function renderEditorOrc(main) {
+  const o = S.orc; const t = totalOrc();
+  const linhas = (o.itens || []).map((it, i) => { const vt = (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0); return `<tr><td class="it-n" style="color:var(--text-muted);text-align:center;font-size:10px">${String(i + 1).padStart(2, '0')}</td><td class="it-desc"><input class="inline-inp" value="${esc(it.descricao)}" oninput="updItem(${i},'descricao',this.value)" /></td><td class="it-und" data-label="Und"><input class="inline-inp inp-sm" value="${esc(it.und)}" oninput="updItem(${i},'und',this.value)" /></td><td class="it-qtd" data-label="Qtd"><input class="inline-inp inp-num" type="number" value="${it.qtd}" oninput="updItem(${i},'qtd',this.value)" /></td><td class="it-vu" data-label="Vl unit"><input class="inline-inp inp-num" type="number" step="0.01" value="${it.vunit}" oninput="updItem(${i},'vunit',this.value)" /></td><td class="it-tot" style="text-align:right"><span class="chip" id="chip-${i}">R$ ${fmtBR(vt)}</span></td><td class="it-rem"><button class="btn-rem" onclick="delItem(${i})" aria-label="Remover item"><i class="ti ti-trash" aria-hidden="true"></i></button></td></tr>`; }).join('');
+  main.innerHTML = `
+    <div class="editor-topbar editor-topbar-orc">
+      <button class="btn-voltar" onclick="fecharOrc()"><i class="ti ti-arrow-left" aria-hidden="true"></i> Orçamentos</button>
+      <div class="et-info" style="flex:1;min-width:0"><div class="editor-titulo">${esc(o.cliente_nome || 'Novo orçamento')}</div><div style="font-size:11px;color:var(--text-muted)">${esc(o.numero || '')} · ${fmtData(o.data)}</div></div>
+      <div class="et-acoes" style="display:flex;gap:7px">
+        <button class="btn" onclick="pdfOrc(${o.id})"><i class="ti ti-file-download" aria-hidden="true"></i> PDF</button>
+        <button class="btn btn-p" onclick="salvarOrc()"><i class="ti ti-device-floppy" aria-hidden="true"></i> Salvar</button>
+      </div>
+    </div>
+    <div class="total-fixo"><span style="font-size:11px;color:rgba(255,255,255,.6)">${(o.itens || []).length} itens · Total</span><span class="total-fixo-valor">R$ ${fmtBR(t)}</span></div>
+    <div class="editor-scroll">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">Dados do cliente</div>
+        <div class="form-grid2">
+          <div class="field col-full"><label>Nome / Razão social</label><input value="${esc(o.cliente_nome)}" oninput="updOrcCliente('cliente_nome',this.value)" placeholder="Ex: Prefeitura de Amontada" /></div>
+          <div class="field"><label>CNPJ / CPF</label><input value="${esc(o.cliente_cnpj)}" oninput="updOrcCliente('cliente_cnpj',this.value)" placeholder="00.000.000/0001-00" /></div>
+          <div class="field"><label>Data</label><input type="date" value="${o.data || ''}" oninput="updOrcCampo('data',this.value)" /></div>
+          <div class="field col-full"><label>Endereço</label><input value="${esc(o.cliente_endereco)}" oninput="updOrcCliente('cliente_endereco',this.value)" /></div>
+          <div class="field col-full"><label>Objeto / Obra</label><input value="${esc(o.obra_descricao)}" oninput="updOrcCliente('obra_descricao',this.value)" /></div>
+          <div class="field"><label>Válido (dias)</label><input type="number" value="${o.validade || 10}" oninput="updOrcCampo('validade',this.value)" style="width:90px" /></div>
+          <div class="field"><label>Status</label><select onchange="updOrcCampo('status',this.value)">${['Rascunho','Enviado','Aprovado','Reprovado'].map(s => `<option ${o.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">Itens do orçamento</div>
+        <div style="overflow-x:auto"><table class="itens-table">
+          <thead><tr><th style="width:30px">Nº</th><th>Descrição</th><th style="width:60px;text-align:right">UND</th><th style="width:60px;text-align:right">Qtd</th><th style="width:90px;text-align:right">Vl unit</th><th style="width:100px;text-align:right">Vl total</th><th style="width:30px"></th></tr></thead>
+          <tbody>${linhas}<tr class="it-novo" style="background:#ebf4ff;border-top:1.5px dashed #90c2f7"><td class="it-n" style="color:var(--text-muted);text-align:center;font-size:10px">+</td><td class="it-desc"><input class="inline-inp" id="n-desc" placeholder="Nova descrição..." /></td><td class="it-und" data-label="Und"><input class="inline-inp inp-sm" id="n-und" value="UND" /></td><td class="it-qtd" data-label="Qtd"><input class="inline-inp inp-num" id="n-qtd" type="number" placeholder="0" oninput="prevItem()" /></td><td class="it-vu" data-label="Vl unit"><input class="inline-inp inp-num" id="n-vunit" type="number" step="0.01" placeholder="0,00" oninput="prevItem()" /></td><td class="it-tot"></td><td class="it-rem"><button class="btn-add-item" onclick="addItem()" aria-label="Adicionar item">+</button></td></tr></tbody>
+        </table></div>
+        <div id="preview-bar"></div>
+        <div class="total-bar"><span class="tl">Valor total</span><span class="tv">R$ ${fmtBR(t)}</span></div>
+      </div>
+      <div class="card"><div class="card-title" style="margin-bottom:10px">Observações</div><div class="field"><textarea oninput="updOrcCampo('obs',this.value)" placeholder="Ex: Prazo de execução: 30 dias.">${esc(o.obs)}</textarea></div></div>
+      <div class="orc-rodape" style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:32px">
+        <button class="btn" onclick="delOrc(${o.id})" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i> Excluir</button>
+        <button class="btn" onclick="dupOrc(${o.id})"><i class="ti ti-copy" aria-hidden="true"></i> Duplicar</button>
+        <button class="btn btn-p" onclick="salvarOrc()"><i class="ti ti-device-floppy" aria-hidden="true"></i> Salvar</button>
+      </div>
+    </div>`;
+  document.getElementById('n-desc')?.addEventListener('keydown', e => { if (e.key === 'Enter') addItem(); });
+}
+
+// ── FINANCEIRO (adiantamentos, adicionais, descontos, empréstimos) ──
+const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const TIPO_LANC = {
+  adiantamento: { rot: 'Adiantamento', badge: 'b-a', sinal: '−' },
+  desconto:     { rot: 'Desconto',     badge: 'b-r', sinal: '−' },
+  adicional:    { rot: 'Adicional',    badge: 'b-g', sinal: '+' },
+};
+if (!S.finAno) { const h = new Date(); S.finAno = h.getFullYear(); S.finMes = h.getMonth() + 1; }
+
+function seletorMes(onchange) {
+  const anos = []; for (let a = new Date().getFullYear() + 1; a >= 2025; a--) anos.push(a);
+  return `<div style="display:flex;gap:6px;align-items:center">
+    <button class="btn" onclick="mudarMes(-1, '${onchange}')" aria-label="Mês anterior"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+    <select class="inp-sm" style="width:auto;min-width:130px" onchange="S.finMes=+this.value;${onchange}()">${MESES.map((m, i) => `<option value="${i + 1}" ${S.finMes === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select>
+    <select class="inp-sm" style="width:auto;min-width:80px" onchange="S.finAno=+this.value;${onchange}()">${anos.map(a => `<option ${S.finAno === a ? 'selected' : ''}>${a}</option>`).join('')}</select>
+    <button class="btn" onclick="mudarMes(1, '${onchange}')" aria-label="Próximo mês"><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
+  </div>`;
+}
+function mudarMes(delta, fn) {
+  let m = S.finMes + delta, a = S.finAno;
+  if (m < 1) { m = 12; a--; } if (m > 12) { m = 1; a++; }
+  S.finMes = m; S.finAno = a; window[fn]();
+}
+function opcoesFuncionarios(sel) {
+  return S.eletricistas.map(e => `<option value="${e.id}" ${e.id === sel ? 'selected' : ''}>${esc(e.nome)}</option>`).join('');
+}
+
+async function carregarFinanceiro() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'financeiro' || !main) return;
+  main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
+  try {
+    const [lancs, emps] = await Promise.all([
+      req('GET', `/financeiro/lancamentos?ano=${S.finAno}&mes=${S.finMes}`),
+      req('GET', '/financeiro/emprestimos'),
+    ]);
+    S.lancs = lancs || []; S.emps = emps || [];
+    renderFinanceiro(main);
+  } catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function renderFinanceiro(main) {
+  const tot = t => S.lancs.filter(l => l.tipo === t).reduce((a, l) => a + l.valor, 0);
+  const linhas = S.lancs.map(l => {
+    const t = TIPO_LANC[l.tipo] || { rot: l.tipo, badge: '', sinal: '' };
+    return `<tr>
+      <td>${fmtData(l.data)}</td>
+      <td style="font-weight:500;color:var(--text-primary)">${esc(l.eletricista_nome)}</td>
+      <td><span class="badge ${t.badge}">${t.rot}</span></td>
+      <td style="color:var(--text-muted)">${esc(l.descricao || '')}</td>
+      <td style="font-weight:500;text-align:right;white-space:nowrap">${t.sinal} R$ ${fmtBR(l.valor)}</td>
+      <td><div style="display:flex;gap:4px;justify-content:flex-end">
+        <button class="btn" onclick="abrirModalLanc(${l.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+        <button class="btn" onclick="excluirLanc(${l.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div></td></tr>`;
+  }).join('');
+
+  const emps = S.emps.map(e => {
+    const pct = Math.min(100, Math.round(e.pago_ate_hoje / e.valor_total * 100));
+    const ini = new Date(e.inicio + 'T12:00:00');
+    return `<div class="obra-item emp-item">
+      <div class="obra-dot" style="background:${e.quitado ? '#10b981' : '#f59e0b'}"></div>
+      <div class="obra-info">
+        <div class="obra-nome">${esc(e.eletricista_nome)} · ${esc(e.descricao)}</div>
+        <div class="obra-loc">R$ ${fmtBR(e.valor_parcela)}/mês desde ${MESES[ini.getMonth()].toLowerCase()}/${ini.getFullYear()} · total R$ ${fmtBR(e.valor_total)}</div>
+        <div class="prog"><div class="prog-fill" style="width:${pct}%;background:${e.quitado ? '#10b981' : '#f59e0b'}"></div></div>
+      </div>
+      <div class="obra-saldo">
+        <div class="obra-val" style="color:${e.quitado ? '#15803d' : '#a16207'}">${e.quitado ? 'Quitado' : 'Falta R$ ' + fmtBR(e.restante)}</div>
+        <div class="obra-pct">${e.quitado ? '' : e.parcelas_restantes + ' parcela(s)'}</div>
+      </div>
+      <div class="emp-acoes" style="display:flex;gap:4px;margin-left:8px">
+        <button class="btn" onclick="abrirModalEmp(${e.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+        <button class="btn" onclick="excluirEmp(${e.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div>
+    </div>`;
+  }).join('') || '<p class="empty">Nenhum empréstimo cadastrado</p>';
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Financeiro da equipe</div><div class="topbar-sub">Adiantamentos, adicionais, descontos e empréstimos</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="abrirModalEmp()"><i class="ti ti-moneybag" aria-hidden="true"></i> Novo empréstimo</button>
+        <button class="btn btn-p" onclick="abrirModalLanc()"><i class="ti ti-plus" aria-hidden="true"></i> Novo lançamento</button>
+      </div>
+    </div>
+    <div class="content">
+      <div style="margin-bottom:14px">${seletorMes('carregarFinanceiro')}</div>
+      <div class="metrics">
+        <div class="metric"><div class="metric-ico amber"><i class="ti ti-cash" aria-hidden="true"></i></div><div class="metric-label">Adiantamentos</div><div class="metric-val">R$ ${fmtBR(tot('adiantamento'))}</div><div class="metric-sub">${MESES[S.finMes - 1]}/${S.finAno}</div></div>
+        <div class="metric"><div class="metric-ico green"><i class="ti ti-plus" aria-hidden="true"></i></div><div class="metric-label">Adicionais</div><div class="metric-val">R$ ${fmtBR(tot('adicional'))}</div><div class="metric-sub">pagos a mais no mês</div></div>
+        <div class="metric"><div class="metric-ico red"><i class="ti ti-minus" aria-hidden="true"></i></div><div class="metric-label">Descontos</div><div class="metric-val">R$ ${fmtBR(tot('desconto'))}</div><div class="metric-sub">avulsos no mês</div></div>
+        <div class="metric"><div class="metric-ico blue"><i class="ti ti-moneybag" aria-hidden="true"></i></div><div class="metric-label">Empréstimos em aberto</div><div class="metric-val">R$ ${fmtBR(S.emps.reduce((a, e) => a + e.restante, 0))}</div><div class="metric-sub">${S.emps.filter(e => !e.quitado).length} ativo(s)</div></div>
+      </div>
+      <div class="table-card" style="margin-bottom:16px">
+        <table class="tbl-cards">
+          <thead><tr><th>Data</th><th>Funcionário</th><th>Tipo</th><th>Descrição</th><th style="text-align:right">Valor</th><th></th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="6" class="empty">Nenhum lançamento neste mês</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title"><i class="ti ti-moneybag" aria-hidden="true"></i> Empréstimos parcelados (descontados todo mês na folha)</span></div>
+        ${emps}
+      </div>
+    </div>`;
+}
+
+function abrirModalLanc(id) {
+  const l = id ? S.lancs.find(x => x.id === id) : null;
+  const hoje = new Date();
+  const dataPadrao = (S.finAno === hoje.getFullYear() && S.finMes === hoje.getMonth() + 1)
+    ? hoje.toISOString().slice(0, 10)
+    : `${S.finAno}-${String(S.finMes).padStart(2, '0')}-01`;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${l ? 'Editar lançamento' : 'Novo lançamento'}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Funcionário *</label><select id="ml-elet">${opcoesFuncionarios(l?.eletricista_id)}</select></div>
+        <div class="form-grid2">
+          <div class="field"><label>Tipo *</label>
+            <select id="ml-tipo">${Object.entries(TIPO_LANC).map(([k, t]) => `<option value="${k}" ${l?.tipo === k ? 'selected' : ''}>${t.rot} (${t.sinal})</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Valor (R$) *</label><input id="ml-valor" type="number" step="0.01" value="${l?.valor || ''}" placeholder="0,00" /></div>
+        </div>
+        <div class="field"><label>Data * <span style="font-weight:400;color:var(--text-muted)">(o mês desta data define a folha)</span></label><input id="ml-data" type="date" value="${l?.data || dataPadrao}" /></div>
+        <div class="field"><label>Descrição</label><input id="ml-desc" value="${esc(l?.descricao || '')}" placeholder="Ex: Vale, Pix adiantado, gratificação..." /></div>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarLanc(${l?.id || 'null'})">${l ? 'Salvar' : 'Lançar'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function salvarLanc(id) {
+  const data = {
+    eletricista_id: +document.getElementById('ml-elet').value,
+    tipo: document.getElementById('ml-tipo').value,
+    valor: parseFloat(document.getElementById('ml-valor').value) || 0,
+    data: document.getElementById('ml-data').value,
+    descricao: document.getElementById('ml-desc').value.trim() || null,
+  };
+  if (!data.eletricista_id || !data.valor || !data.data) { toast('Preencha funcionário, valor e data', 'erro'); return; }
+  try {
+    await req(id ? 'PUT' : 'POST', id ? `/financeiro/lancamentos/${id}` : '/financeiro/lancamentos', data);
+    fecharModal(); toast(id ? 'Lançamento atualizado!' : 'Lançamento salvo!');
+    const d = new Date(data.data + 'T12:00:00'); S.finAno = d.getFullYear(); S.finMes = d.getMonth() + 1;
+    carregarFinanceiro();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirLanc(id) {
+  if (!confirm('Excluir este lançamento?')) return;
+  try { await req('DELETE', `/financeiro/lancamentos/${id}`); toast('Excluído!'); carregarFinanceiro(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+function abrirModalEmp(id) {
+  const e = id ? S.emps.find(x => x.id === id) : null;
+  const mesPadrao = e ? e.inicio.slice(0, 7) : `${S.finAno}-${String(S.finMes).padStart(2, '0')}`;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${e ? 'Editar empréstimo' : 'Novo empréstimo'}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Funcionário *</label><select id="mp-elet">${opcoesFuncionarios(e?.eletricista_id)}</select></div>
+        <div class="field"><label>Descrição *</label><input id="mp-desc" value="${esc(e?.descricao || '')}" placeholder="Ex: Moto, Empréstimo pessoal" /></div>
+        <div class="form-grid2">
+          <div class="field"><label>Valor total (R$) *</label><input id="mp-total" type="number" step="0.01" value="${e?.valor_total || ''}" placeholder="5.000,00" /></div>
+          <div class="field"><label>Parcela por mês (R$) *</label><input id="mp-parcela" type="number" step="0.01" value="${e?.valor_parcela || ''}" placeholder="500,00" /></div>
+        </div>
+        <div class="field"><label>Primeira parcela na folha de *</label><input id="mp-inicio" type="month" value="${mesPadrao}" /></div>
+        <div class="field"><label>Observação</label><input id="mp-obs" value="${esc(e?.observacao || '')}" /></div>
+        <p style="font-size:12px;color:var(--text-muted);margin:4px 0 0">A parcela é descontada automaticamente na folha de cada mês até completar o valor total.</p>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarEmp(${e?.id || 'null'})">${e ? 'Salvar' : 'Cadastrar'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function salvarEmp(id) {
+  const ini = document.getElementById('mp-inicio').value;
+  const data = {
+    eletricista_id: +document.getElementById('mp-elet').value,
+    descricao: document.getElementById('mp-desc').value.trim(),
+    valor_total: parseFloat(document.getElementById('mp-total').value) || 0,
+    valor_parcela: parseFloat(document.getElementById('mp-parcela').value) || 0,
+    inicio: ini ? ini + '-01' : '',
+    observacao: document.getElementById('mp-obs').value.trim() || null,
+  };
+  if (!data.eletricista_id || !data.descricao || !data.valor_total || !data.valor_parcela || !data.inicio) { toast('Preencha todos os campos com *', 'erro'); return; }
+  try {
+    await req(id ? 'PUT' : 'POST', id ? `/financeiro/emprestimos/${id}` : '/financeiro/emprestimos', data);
+    fecharModal(); toast(id ? 'Empréstimo atualizado!' : 'Empréstimo cadastrado!'); carregarFinanceiro();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirEmp(id) {
+  if (!confirm('Excluir este empréstimo? As parcelas deixam de ser descontadas em todas as folhas.')) return;
+  try { await req('DELETE', `/financeiro/emprestimos/${id}`); toast('Excluído!'); carregarFinanceiro(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+// ── FOLHA MENSAL ──────────────────────────────────────────────
+async function carregarFolha() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'folha' || !main) return;
+  main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Calculando folha...</p></div>';
+  try {
+    S.folha = await req('GET', `/financeiro/folha?ano=${S.finAno}&mes=${S.finMes}`);
+    renderFolha(main);
+  } catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function renderFolha(main) {
+  const f = S.folha || { linhas: [], totais: {} };
+  const t = f.totais || {};
+  const neg = v => v ? `<span style="color:#b91c1c">− ${fmtBR(v)}</span>` : '<span style="color:var(--text-muted)">—</span>';
+  const linhas = f.linhas.map(l => `
+    <tr>
+      <td class="td-titulo link-cal" onclick="abrirCalendario(${l.eletricista_id})" title="Ver dias trabalhados"><div style="font-weight:500;color:var(--text-primary)">${esc(l.nome)} <i class="ti ti-calendar-event" aria-hidden="true" style="color:#9aa5b4;font-size:13px"></i></div>
+        <div style="font-size:11px;color:var(--text-muted)">${l.tipo_contrato === 'Mensalista' ? 'Mensalista' : l.dias + ' dia(s) apontado(s)'}</div></td>
+      <td data-label="${l.tipo_contrato === 'Mensalista' ? 'Fixo' : 'Diárias'}" style="text-align:right">${l.tipo_contrato === 'Mensalista' ? fmtBR(l.salario_fixo) + ' <span class="badge" style="font-size:10px">fixo</span>' : fmtBR(l.valor_diarias)}</td>
+      <td data-label="Adicionais" class="${l.adicionais ? '' : 'td-vazio'}" style="text-align:right">${l.adicionais ? '+ ' + fmtBR(l.adicionais) : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td data-label="Bruto" style="text-align:right;font-weight:500">${fmtBR(l.bruto)}</td>
+      <td data-label="Adiantamentos" class="${l.adiantamentos ? '' : 'td-vazio'}" style="text-align:right">${neg(l.adiantamentos)}</td>
+      <td data-label="Descontos" class="${l.descontos ? '' : 'td-vazio'}" style="text-align:right">${neg(l.descontos)}</td>
+      <td data-label="Parcelas${l.parcelas_detalhe.length ? ' (' + esc(l.parcelas_detalhe.map(x => x.split(':')[0]).join(', ')) + ')' : ''}" class="${l.parcelas ? '' : 'td-vazio'}" style="text-align:right" title="${esc(l.parcelas_detalhe.join(' | '))}">${neg(l.parcelas)}</td>
+      <td data-label="A receber" class="td-destaque" style="text-align:right;font-weight:600;color:${l.a_receber < 0 ? '#b91c1c' : 'var(--text-primary)'}">R$ ${fmtBR(l.a_receber)}</td>
+    </tr>`).join('');
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Folha mensal</div><div class="topbar-sub">${MESES[S.finMes - 1]} de ${S.finAno} · ${f.linhas.length} funcionário(s)</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="navegar('financeiro')"><i class="ti ti-cash" aria-hidden="true"></i> Lançar adiantamento</button>
+        <button class="btn btn-p" onclick="window.print()"><i class="ti ti-printer" aria-hidden="true"></i> Imprimir</button>
+      </div>
+    </div>
+    <div class="content">
+      <div style="margin-bottom:14px">${seletorMes('carregarFolha')}</div>
+      <div class="metrics">
+        <div class="metric"><div class="metric-ico blue"><i class="ti ti-report-money" aria-hidden="true"></i></div><div class="metric-label">Total bruto</div><div class="metric-val">R$ ${fmtBR(t.bruto)}</div><div class="metric-sub">diárias + fixos + adicionais</div></div>
+        <div class="metric"><div class="metric-ico amber"><i class="ti ti-cash" aria-hidden="true"></i></div><div class="metric-label">Adiantamentos</div><div class="metric-val">R$ ${fmtBR(t.adiantamentos)}</div><div class="metric-sub">já pagos no mês</div></div>
+        <div class="metric"><div class="metric-ico red"><i class="ti ti-moneybag" aria-hidden="true"></i></div><div class="metric-label">Descontos + parcelas</div><div class="metric-val">R$ ${fmtBR((t.descontos || 0) + (t.parcelas || 0))}</div><div class="metric-sub">empréstimos e avulsos</div></div>
+        <div class="metric"><div class="metric-ico green"><i class="ti ti-wallet" aria-hidden="true"></i></div><div class="metric-label">A pagar</div><div class="metric-val" style="color:#15803d">R$ ${fmtBR(t.a_receber)}</div><div class="metric-sub">valor final a receber</div></div>
+      </div>
+      <div class="table-card" style="overflow-x:auto">
+        <table class="tbl-lista">
+          <thead><tr><th>Funcionário</th><th style="text-align:right">Diárias / Fixo</th><th style="text-align:right">Adicionais</th><th style="text-align:right">Bruto</th><th style="text-align:right">Adiant.</th><th style="text-align:right">Descontos</th><th style="text-align:right">Parcelas</th><th style="text-align:right">A receber</th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="8" class="empty">Nenhum movimento neste mês</td></tr>'}</tbody>
+          ${f.linhas.length ? `<tfoot><tr style="font-weight:600;border-top:2px solid var(--border, #e5e7eb)">
+            <td class="td-titulo">TOTAL DA FOLHA</td><td data-label="Diárias + fixos" style="text-align:right">${fmtBR((t.valor_diarias || 0) + (t.salario_fixo || 0))}</td><td data-label="Adicionais" style="text-align:right">${fmtBR(t.adicionais)}</td>
+            <td data-label="Bruto" style="text-align:right">${fmtBR(t.bruto)}</td><td data-label="Adiantamentos" style="text-align:right">${fmtBR(t.adiantamentos)}</td><td data-label="Descontos" style="text-align:right">${fmtBR(t.descontos)}</td>
+            <td data-label="Parcelas" style="text-align:right">${fmtBR(t.parcelas)}</td><td data-label="A receber" class="td-destaque" style="text-align:right">R$ ${fmtBR(t.a_receber)}</td></tr></tfoot>` : ''}
+        </table>
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Mensalistas recebem só o fixo + adicionais (diárias lançadas para eles servem apenas para o custo das obras). Passe o mouse em "Parcelas" para ver o detalhe dos empréstimos.</p>
+    </div>`;
+}
+
+// ── DESPESAS (alimentação e outros custos) ─────────────────────
+const CAT_DESP = {
+  alimentacao: { nome: 'Alimentação', badge: 'b-a', ico: 'ti-tools-kitchen-2' },
+  combustivel: { nome: 'Combustível / Frete', badge: '', ico: 'ti-gas-station' },
+  ferramentas: { nome: 'Ferramentas / EPI', badge: '', ico: 'ti-tool' },
+  hospedagem:  { nome: 'Hospedagem / Deslocamento', badge: '', ico: 'ti-bed' },
+  outros:      { nome: 'Outros', badge: '', ico: 'ti-dots' },
+};
+
+async function carregarDespesas() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'despesas' || !main) return;
+  main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
+  try { S.desp = await req('GET', `/despesas/?ano=${S.finAno}&mes=${S.finMes}`); renderDespesas(main); }
+  catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function valorPessoaPadrao() {
+  const a = (S.desp?.despesas || []).find(d => d.categoria === 'alimentacao' && d.automatica && d.pessoas);
+  if (a) return +(a.valor / a.pessoas).toFixed(2);
+  try { return +localStorage.getItem('az_valor_refeicao') || 20; } catch { return 20; }
+}
+
+function renderDespesas(main) {
+  const D = S.desp || { despesas: [], por_categoria: [], total: 0, alimentacao: {} };
+  const al = D.alimentacao || {};
+  const outros = D.por_categoria.filter(c => c.id !== 'alimentacao').reduce((a, c) => a + c.valor, 0);
+  const linhas = D.despesas.map(d => {
+    const c = CAT_DESP[d.categoria] || { nome: d.categoria, badge: '' };
+    return `<tr>
+      <td>${fmtData(d.data)}</td>
+      <td><span class="badge ${c.badge}">${c.nome}</span>${d.automatica ? ' <span style="font-size:10px;color:var(--text-muted)" title="Calculada pelos apontamentos">auto</span>' : ''}</td>
+      <td style="color:var(--text-muted)">${esc(d.descricao || '')}${d.obra_nome ? ' · ' + esc(d.obra_nome) : ''}</td>
+      <td style="text-align:right;font-weight:500;white-space:nowrap">R$ ${fmtBR(d.valor)}</td>
+      <td><div style="display:flex;gap:4px;justify-content:flex-end">
+        <button class="btn" onclick="abrirModalDesp(${d.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+        <button class="btn" onclick="excluirDesp(${d.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div></td></tr>`;
+  }).join('');
+  const resumoCat = D.por_categoria.filter(c => c.valor).map(c => `
+    <div class="fin-row" style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border, #eef0f3)">
+      <span class="fin-label">${(CAT_DESP[c.id] || {}).nome || c.nome}</span><span class="fin-val" style="font-weight:500">R$ ${fmtBR(c.valor)}</span></div>`).join('')
+    || '<p class="empty">Nenhuma despesa neste mês</p>';
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Despesas</div><div class="topbar-sub">Alimentação e outros custos · ${MESES[S.finMes - 1]} de ${S.finAno}</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="abrirModalCalcAlim()"><i class="ti ti-calculator" aria-hidden="true"></i> Calcular alimentação</button>
+        <button class="btn btn-p" onclick="abrirModalDesp()"><i class="ti ti-plus" aria-hidden="true"></i> Nova despesa</button>
+      </div>
+    </div>
+    <div class="content">
+      <div style="margin-bottom:14px">${seletorMes('carregarDespesas')}</div>
+      <div class="metrics">
+        <div class="metric"><div class="metric-ico amber"><i class="ti ti-tools-kitchen-2" aria-hidden="true"></i></div><div class="metric-label">Alimentação</div><div class="metric-val">R$ ${fmtBR(al.total)}</div><div class="metric-sub">${al.refeicoes || 0} refeições em ${al.dias || 0} dia(s)</div></div>
+        <div class="metric"><div class="metric-ico blue"><i class="ti ti-users" aria-hidden="true"></i></div><div class="metric-label">Média de pessoas/dia</div><div class="metric-val">${al.dias ? (al.refeicoes / al.dias).toFixed(1) : '0'}</div><div class="metric-sub">nos dias com refeição</div></div>
+        <div class="metric"><div class="metric-ico red"><i class="ti ti-receipt" aria-hidden="true"></i></div><div class="metric-label">Outros custos</div><div class="metric-val">R$ ${fmtBR(outros)}</div><div class="metric-sub">combustível, ferramentas, hospedagem...</div></div>
+        <div class="metric"><div class="metric-ico green"><i class="ti ti-sum" aria-hidden="true"></i></div><div class="metric-label">Total de despesas</div><div class="metric-val">R$ ${fmtBR(D.total)}</div><div class="metric-sub">sem contar a mão de obra</div></div>
+      </div>
+      <div class="row2">
+        <div class="table-card" style="overflow-x:auto">
+          <table class="tbl-cards">
+            <thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th style="text-align:right">Valor</th><th></th></tr></thead>
+            <tbody>${linhas || '<tr><td colspan="5" class="empty">Nenhuma despesa neste mês. Use "Calcular alimentação" para gerar pelos apontamentos.</td></tr>'}</tbody>
+          </table>
+        </div>
+        <div class="card" style="align-self:start">
+          <div class="card-header"><span class="card-title"><i class="ti ti-chart-pie" aria-hidden="true"></i> Por categoria</span></div>
+          ${resumoCat}
+        </div>
+      </div>
+    </div>`;
+}
+
+function abrirModalCalcAlim() {
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">Calcular alimentação · ${MESES[S.finMes - 1]}/${S.finAno}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">Para cada dia com apontamento, conta quem trabalhou e multiplica pelo valor por pessoa. Dias que você lançou ou editou à mão não são alterados.</p>
+        <div class="field"><label>Valor por pessoa/dia (R$)</label><input id="ca-valor" type="number" step="0.01" value="${valorPessoaPadrao()}" /></div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0 4px"><input id="ca-mens" type="checkbox" checked style="width:auto" /> Incluir mensalistas em todo dia com equipe trabalhando</label>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="calcularAlimentacao()">Calcular</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function calcularAlimentacao() {
+  const valor = parseFloat(document.getElementById('ca-valor').value) || 0;
+  if (valor <= 0) { toast('Informe o valor por pessoa', 'erro'); return; }
+  try {
+    const r = await req('POST', '/despesas/alimentacao/calcular', { ano: S.finAno, mes: S.finMes, valor_pessoa: valor, incluir_mensalistas: document.getElementById('ca-mens').checked });
+    try { localStorage.setItem('az_valor_refeicao', valor); } catch {}
+    fecharModal(); toast(`Alimentação calculada: ${r.dias} dia(s), R$ ${fmtBR(r.total)}`); carregarDespesas();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+function abrirModalDesp(id) {
+  const d = id ? (S.desp?.despesas || []).find(x => x.id === id) : null;
+  const hoje = new Date();
+  const dataPadrao = (S.finAno === hoje.getFullYear() && S.finMes === hoje.getMonth() + 1) ? hoje.toISOString().slice(0, 10) : `${S.finAno}-${String(S.finMes).padStart(2, '0')}-01`;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${d ? 'Editar despesa' : 'Nova despesa'}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="form-grid2">
+          <div class="field"><label>Categoria *</label><select id="md-cat">${Object.entries(CAT_DESP).map(([k, c]) => `<option value="${k}" ${d?.categoria === k ? 'selected' : ''}>${c.nome}</option>`).join('')}</select></div>
+          <div class="field"><label>Valor (R$) *</label><input id="md-valor" type="number" step="0.01" value="${d?.valor || ''}" placeholder="0,00" /></div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Data *</label><input id="md-data" type="date" value="${d?.data || dataPadrao}" /></div>
+          <div class="field"><label>Pessoas <span style="font-weight:400;color:var(--text-muted)">(alimentação)</span></label><input id="md-pessoas" type="number" value="${d?.pessoas || ''}" /></div>
+        </div>
+        <div class="field"><label>Obra <span style="font-weight:400;color:var(--text-muted)">(opcional)</span></label><select id="md-obra"><option value="">—</option>${S.obras.map(o => `<option value="${o.id}" ${d?.obra_id === o.id ? 'selected' : ''}>${esc(o.nome)}</option>`).join('')}</select></div>
+        <div class="field"><label>Descrição</label><input id="md-desc" value="${esc(d?.descricao || '')}" placeholder="Ex: Rancho Atacadão, diesel caminhonete..." /></div>
+        ${d?.automatica ? '<p style="font-size:12px;color:var(--text-muted);margin:0">Ao salvar, este dia passa a ser manual e o cálculo automático não mexe mais nele.</p>' : ''}
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarDesp(${d?.id || 'null'})">${d ? 'Salvar' : 'Lançar'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function salvarDesp(id) {
+  const data = {
+    categoria: document.getElementById('md-cat').value,
+    valor: parseFloat(document.getElementById('md-valor').value) || 0,
+    data: document.getElementById('md-data').value,
+    pessoas: parseInt(document.getElementById('md-pessoas').value) || null,
+    obra_id: parseInt(document.getElementById('md-obra').value) || null,
+    descricao: document.getElementById('md-desc').value.trim() || null,
+  };
+  if (!data.valor || !data.data) { toast('Preencha valor e data', 'erro'); return; }
+  try {
+    await req(id ? 'PUT' : 'POST', id ? `/despesas/${id}` : '/despesas/', data);
+    const dt = new Date(data.data + 'T12:00:00'); S.finAno = dt.getFullYear(); S.finMes = dt.getMonth() + 1;
+    fecharModal(); toast(id ? 'Despesa atualizada!' : 'Despesa lançada!'); carregarDespesas();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirDesp(id) {
+  if (!confirm('Excluir esta despesa?')) return;
+  try { await req('DELETE', `/despesas/${id}`); toast('Excluída!'); carregarDespesas(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+// ── FERRAMENTAS (onde está cada unidade) ───────────────────────
+async function carregarFerramentas() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'ferramentas' || !main) return;
+  if (!S.ferr) main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
+  try { S.ferr = await req('GET', '/ferramentas/') || []; renderFerramentas(main); }
+  catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function chipLocal(nome, qtd, cor) {
+  return `<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;background:${cor};margin:2px 4px 2px 0;white-space:nowrap">
+    ${esc(nome)} <b>${qtd}</b></span>`;
+}
+
+function renderFerramentas(main) {
+  const filtro = S.ferrFiltro ?? '';          // '' = todas, 'dep' = depósito, id = obra
+  const busca = (S.ferrBusca || '').toLowerCase();
+  let lista = (S.ferr || []).filter(f => !busca || f.nome.toLowerCase().includes(busca));
+  if (filtro === 'dep') lista = lista.filter(f => f.deposito > 0);
+  else if (filtro) lista = lista.filter(f => f.locais.some(l => l.obra_id === +filtro));
+
+  const obrasComFerr = {};
+  (S.ferr || []).forEach(f => f.locais.forEach(l => { obrasComFerr[l.obra_id] = (obrasComFerr[l.obra_id] || 0) + l.quantidade; }));
+  const totalUn = (S.ferr || []).reduce((a, f) => a + f.quantidade_total, 0);
+  const emObras = (S.ferr || []).reduce((a, f) => a + f.em_obras, 0);
+
+  const linhas = lista.map(f => {
+    const chips = (f.deposito > 0 ? chipLocal('Depósito', f.deposito, '#e5e7eb') : '') +
+      f.locais.map(l => chipLocal(l.obra_nome, l.quantidade, (filtro && +filtro === l.obra_id) ? '#fde68a' : '#dbeafe')).join('');
+    return `<tr>
+      <td><div style="font-weight:500;color:var(--text-primary)">${esc(f.nome)}</div>
+        ${f.observacao ? `<div style="font-size:11px;color:var(--text-muted)">${esc(f.observacao)}</div>` : ''}</td>
+      <td style="text-align:center;font-weight:600">${f.quantidade_total}<span class="so-mobile"> un.</span></td>
+      <td>${chips || '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td><div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-p" onclick="abrirModalMover(${f.id})" title="Mover"><i class="ti ti-arrows-exchange" aria-hidden="true"></i> Mover</button>
+        <button class="btn" onclick="abrirHistFerr(${f.id})" title="Histórico"><i class="ti ti-history" aria-hidden="true"></i></button>
+        <button class="btn" onclick="abrirModalFerr(${f.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+        <button class="btn" onclick="excluirFerr(${f.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div></td></tr>`;
+  }).join('');
+
+  const opcoesFiltro = `<option value="">Todos os locais</option><option value="dep" ${filtro === 'dep' ? 'selected' : ''}>Depósito</option>` +
+    S.obras.filter(o => obrasComFerr[o.id]).sort((a, b) => a.nome.localeCompare(b.nome))
+      .map(o => `<option value="${o.id}" ${String(filtro) === String(o.id) ? 'selected' : ''}>${esc(o.nome)} (${obrasComFerr[o.id]})</option>`).join('');
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Ferramentas</div><div class="topbar-sub">${(S.ferr || []).length} ferramenta(s) · ${totalUn} unidade(s)</div></div>
+      <div style="display:flex;gap:8px"><button class="btn btn-p" onclick="abrirModalFerr()"><i class="ti ti-plus" aria-hidden="true"></i> Nova ferramenta</button></div>
+    </div>
+    <div class="content">
+      <div class="metrics">
+        <div class="metric"><div class="metric-ico blue"><i class="ti ti-tool" aria-hidden="true"></i></div><div class="metric-label">Unidades</div><div class="metric-val">${totalUn}</div><div class="metric-sub">${(S.ferr || []).length} tipo(s) de ferramenta</div></div>
+        <div class="metric"><div class="metric-ico green"><i class="ti ti-building-warehouse" aria-hidden="true"></i></div><div class="metric-label">No depósito</div><div class="metric-val">${totalUn - emObras}</div><div class="metric-sub">disponíveis</div></div>
+        <div class="metric"><div class="metric-ico amber"><i class="ti ti-building-factory-2" aria-hidden="true"></i></div><div class="metric-label">Em obras</div><div class="metric-val">${emObras}</div><div class="metric-sub">em ${Object.keys(obrasComFerr).length} obra(s)</div></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <input placeholder="Buscar ferramenta..." value="${esc(S.ferrBusca || '')}" oninput="S.ferrBusca=this.value;renderFerramentas(document.getElementById('main'));this.focus();this.setSelectionRange(this.value.length,this.value.length)" style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border,#d1d5db);border-radius:8px" />
+        <select onchange="S.ferrFiltro=this.value;renderFerramentas(document.getElementById('main'))" style="min-width:220px;padding:8px;border:1px solid var(--border,#d1d5db);border-radius:8px">${opcoesFiltro}</select>
+      </div>
+      <div class="table-card" style="overflow-x:auto">
+        <table class="tbl-cards">
+          <thead><tr><th>Ferramenta</th><th style="text-align:center">Qtd</th><th>Onde está</th><th></th></tr></thead>
+          <tbody>${linhas || `<tr><td colspan="4" class="empty">${(S.ferr || []).length ? 'Nenhuma ferramenta neste filtro' : 'Nenhuma ferramenta cadastrada. Clique em "Nova ferramenta".'}</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function abrirModalFerr(id) {
+  const f = id ? S.ferr.find(x => x.id === id) : null;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${f ? 'Editar ferramenta' : 'Nova ferramenta'}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Nome *</label><input id="mf-nome" value="${esc(f?.nome || '')}" placeholder="Ex: Escada 7 degraus, Martelete rompedor" /></div>
+        <div class="field"><label>Quantidade total *</label><input id="mf-qtd" type="number" min="1" value="${f?.quantidade_total || 1}" /></div>
+        <div class="field"><label>Observação</label><input id="mf-obs" value="${esc(f?.observacao || '')}" placeholder="Ex: marca, voltagem, nº de série" /></div>
+        ${f ? '' : '<p style="font-size:12px;color:var(--text-muted);margin:0">Ao cadastrar, todas as unidades ficam no Depósito. Depois use "Mover" para mandar para as obras.</p>'}
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarFerr(${f?.id || 'null'})">${f ? 'Salvar' : 'Cadastrar'}</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById('mf-nome')?.focus(), 50);
+}
+
+async function salvarFerr(id) {
+  const data = { nome: document.getElementById('mf-nome').value.trim(), quantidade_total: parseInt(document.getElementById('mf-qtd').value) || 0, observacao: document.getElementById('mf-obs').value.trim() || null };
+  if (!data.nome || data.quantidade_total < 1) { toast('Preencha o nome e a quantidade', 'erro'); return; }
+  try {
+    await req(id ? 'PUT' : 'POST', id ? `/ferramentas/${id}` : '/ferramentas/', data);
+    fecharModal(); toast(id ? 'Ferramenta atualizada!' : 'Ferramenta cadastrada!'); carregarFerramentas();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirFerr(id) {
+  const f = S.ferr.find(x => x.id === id);
+  if (!confirm(`Excluir "${f?.nome}"? O histórico de movimentações também será apagado.`)) return;
+  try { await req('DELETE', `/ferramentas/${id}`); toast('Excluída!'); carregarFerramentas(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+function abrirModalMover(id) {
+  const f = S.ferr.find(x => x.id === id);
+  const origens = [];
+  if (f.deposito > 0) origens.push({ v: '', n: `Depósito (${f.deposito} disp.)`, q: f.deposito });
+  f.locais.forEach(l => origens.push({ v: l.obra_id, n: `${l.obra_nome} (${l.quantidade})`, q: l.quantidade }));
+  if (!origens.length) { toast('Nenhuma unidade disponível', 'erro'); return; }
+  const obrasOrd = [...S.obras].sort((a, b) => a.nome.localeCompare(b.nome));
+  const filtroObra = S.ferrFiltro && S.ferrFiltro !== 'dep' ? +S.ferrFiltro : null;
+  // origem padrão: o filtro (se a ferramenta estiver lá) ou o depósito; destino padrão: depósito se vier de obra
+  const origemPadrao = filtroObra && f.locais.some(l => l.obra_id === filtroObra) ? filtroObra : origens[0].v;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">Mover · ${esc(f.nome)}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="form-grid2">
+          <div class="field"><label>De *</label><select id="mm-de" onchange="ajustarMaxMover()">${origens.map(o => `<option value="${o.v}" data-q="${o.q}" ${String(o.v) === String(origemPadrao) ? 'selected' : ''}>${esc(o.n)}</option>`).join('')}</select></div>
+          <div class="field"><label>Para *</label><select id="mm-para"><option value="">Depósito</option>${obrasOrd.map(o => `<option value="${o.id}">${esc(o.nome)}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Quantidade *</label><input id="mm-qtd" type="number" min="1" value="1" /></div>
+          <div class="field"><label>Data</label><input id="mm-data" type="date" value="${new Date().toISOString().slice(0, 10)}" /></div>
+        </div>
+        <div class="field"><label>Observação</label><input id="mm-obs" placeholder="Ex: levou o Wesley, voltou com defeito..." /></div>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="moverFerr(${f.id})"><i class="ti ti-arrows-exchange" aria-hidden="true"></i> Mover</button>
+        </div>
+      </div>
+    </div>`;
+  if (origemPadrao === '' && filtroObra) document.getElementById('mm-para').value = filtroObra;   // filtrando uma obra: sugere mandar pra ela
+  ajustarMaxMover();
+}
+
+function ajustarMaxMover() {
+  const de = document.getElementById('mm-de'); const q = +de.selectedOptions[0].dataset.q;
+  const inp = document.getElementById('mm-qtd'); inp.max = q; if (+inp.value > q) inp.value = q;
+  const para = document.getElementById('mm-para');
+  if (de.value && para.value === de.value) para.value = '';          // vindo de obra: sugere voltar ao depósito
+  if (!de.value && !para.value) { const op = [...para.options].find(o => o.value); if (op) para.value = op.value; }
+}
+
+async function moverFerr(id) {
+  const de = document.getElementById('mm-de').value, para = document.getElementById('mm-para').value;
+  const body = {
+    quantidade: parseInt(document.getElementById('mm-qtd').value) || 0,
+    origem_obra_id: de ? +de : null, destino_obra_id: para ? +para : null,
+    data: document.getElementById('mm-data').value || null,
+    observacao: document.getElementById('mm-obs').value.trim() || null,
+  };
+  if (body.quantidade < 1) { toast('Informe a quantidade', 'erro'); return; }
+  if (de === para) { toast('Origem e destino são o mesmo lugar', 'erro'); return; }
+  try { await req('POST', `/ferramentas/${id}/mover`, body); fecharModal(); toast('Ferramenta movida!'); carregarFerramentas(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+async function abrirHistFerr(id) {
+  const f = S.ferr.find(x => x.id === id);
+  let hist = [];
+  try { hist = await req('GET', `/ferramentas/${id}/historico`) || []; } catch (err) { toast(err.message, 'erro'); return; }
+  const linhas = hist.map(h => `<tr><td>${fmtData(h.data)}</td><td style="text-align:center">${h.quantidade}</td>
+    <td>${esc(h.origem)} <i class="ti ti-arrow-right" aria-hidden="true"></i> <b>${esc(h.destino)}</b></td>
+    <td style="color:var(--text-muted)">${esc(h.observacao || '')}</td></tr>`).join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal" style="max-width:640px">
+        <div class="modal-header"><span class="modal-title">Histórico · ${esc(f.nome)}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div style="max-height:60vh;overflow:auto"><table>
+          <thead><tr><th>Data</th><th style="text-align:center">Qtd</th><th>Movimento</th><th>Obs.</th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="4" class="empty">Sem movimentações</td></tr>'}</tbody>
+        </table></div>
+      </div>
+    </div>`;
+}
+
+// ── CALENDÁRIO DO FUNCIONÁRIO (dias trabalhados no mês) ───────
+const CORES_OBRA = ['#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#64748b'];
+const DIAS_SEM = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function abrirCalendario(eid, ano, mes) {
+  const e = S.eletricistas.find(x => x.id === eid);
+  if (!e) { toast('Funcionário não encontrado', 'erro'); return; }
+  S.cal = { eid, ano: ano || S.finAno, mes: mes || S.finMes, dados: null, dia: null };
+  renderCalendario();
+  carregarCalendario();
+}
+function abrirCalendarioPorNome(nome) {
+  const e = S.eletricistas.find(x => x.nome === nome);
+  if (e) abrirCalendario(e.id);
+}
+
+async function carregarCalendario() {
+  const c = S.cal; if (!c) return;
+  const ini = `${c.ano}-${String(c.mes).padStart(2, '0')}-01`;
+  const ult = new Date(c.ano, c.mes, 0).getDate();
+  const fim = `${c.ano}-${String(c.mes).padStart(2, '0')}-${ult}`;
+  try {
+    const lista = await req('GET', `/apontamentos/?eletricista_id=${c.eid}&data_inicio=${ini}&data_fim=${fim}`) || [];
+    if (S.cal !== c) return;              // usuário já fechou ou trocou
+    c.dados = lista; renderCalendario();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+function mudarMesCal(delta) {
+  const c = S.cal; let m = c.mes + delta, a = c.ano;
+  if (m < 1) { m = 12; a--; } if (m > 12) { m = 1; a++; }
+  c.mes = m; c.ano = a; c.dados = null; c.dia = null; renderCalendario(); carregarCalendario();
+}
+function selecionarDiaCal(d) { S.cal.dia = S.cal.dia === d ? null : d; renderCalendario(); }
+function fecharCalendario() { S.cal = null; fecharModal(); }
+
+function renderCalendario() {
+  const c = S.cal; if (!c) return;
+  const e = S.eletricistas.find(x => x.id === c.eid) || { nome: '' };
+  const porDia = {};
+  (c.dados || []).forEach(a => { porDia[+a.data.slice(8, 10)] = a; });
+
+  // cor fixa por obra dentro do mês (a que tem mais gasto fica azul)
+  const totObra = {};
+  (c.dados || []).forEach(a => a.itens.forEach(i => { totObra[i.obra_nome] = (totObra[i.obra_nome] || 0) + i.valor; }));
+  const obrasOrd = Object.keys(totObra).sort((a, b) => totObra[b] - totObra[a]);
+  const cor = n => CORES_OBRA[obrasOrd.indexOf(n) % CORES_OBRA.length] || '#64748b';
+
+  const totalMes = (c.dados || []).reduce((s, a) => s + a.total_dia, 0);
+  const diasTrab = (c.dados || []).length;
+  const hoje = new Date(); const ehHoje = d => hoje.getFullYear() === c.ano && hoje.getMonth() + 1 === c.mes && hoje.getDate() === d;
+
+  const primeiroDia = new Date(c.ano, c.mes - 1, 1).getDay();
+  const nDias = new Date(c.ano, c.mes, 0).getDate();
+  let cels = '';
+  for (let i = 0; i < primeiroDia; i++) cels += '<div class="cal-cel cal-vazia"></div>';
+  for (let d = 1; d <= nDias; d++) {
+    const a = porDia[d]; const sem = (primeiroDia + d - 1) % 7; const fds = sem === 0 || sem === 6;
+    const obras = a ? a.itens : [];
+    const barras = obras.map(i => `<span class="cal-barra" style="background:${cor(i.obra_nome)}" title="${esc(i.obra_nome)}"></span>`).join('');
+    const nomeObra = obras.length ? `<span class="cal-obra">${esc(obras.length > 1 ? obras.length + ' obras' : obras[0].obra_nome)}</span>` : '';
+    cels += `<button class="cal-cel ${a ? 'cal-trab' : ''} ${fds ? 'cal-fds' : ''} ${c.dia === d ? 'cal-sel' : ''} ${ehHoje(d) ? 'cal-hoje' : ''}" ${a ? `onclick="selecionarDiaCal(${d})"` : 'disabled'}
+      style="${a ? `--cor:${cor(obras[0]?.obra_nome)}` : ''}">
+      <span class="cal-num">${d}</span>
+      ${a ? `<span class="cal-val">${fmtBR(a.total_dia).replace(',00', '')}</span>${nomeObra}<span class="cal-barras">${barras}</span>` : ''}
+    </button>`;
+  }
+
+  const legenda = obrasOrd.map(n => {
+    const dias = (c.dados || []).filter(a => a.itens.some(i => i.obra_nome === n)).length;
+    return `<div class="cal-leg"><span class="cal-leg-cor" style="background:${cor(n)}"></span><span class="cal-leg-nome">${esc(n)}</span><span class="cal-leg-val">${dias} dia(s) · R$ ${fmtBR(totObra[n])}</span></div>`;
+  }).join('');
+
+  let detalhe = '';
+  if (c.dia && porDia[c.dia]) {
+    const a = porDia[c.dia];
+    const dt = new Date(c.ano, c.mes - 1, c.dia);
+    detalhe = `<div class="cal-detalhe">
+      <div class="cal-det-tit">${DIAS_SEM[dt.getDay()]}, ${c.dia}/${String(c.mes).padStart(2, '0')}/${c.ano}<span>R$ ${fmtBR(a.total_dia)}</span></div>
+      ${a.itens.map(i => `<div class="cal-det-lin"><span><span class="cal-leg-cor" style="background:${cor(i.obra_nome)}"></span>${esc(i.obra_nome)}</span><b>R$ ${fmtBR(i.valor)}</b></div>`).join('')}
+      ${a.adicionais.map(x => `<div class="cal-det-lin"><span>+ ${esc(x.tipo_label)}${x.descricao ? ': ' + esc(x.descricao) : ''}</span><b>R$ ${fmtBR(x.valor)}</b></div>`).join('')}
+      ${a.observacao ? `<div class="cal-det-obs">${esc(a.observacao)}</div>` : ''}
+    </div>`;
+  }
+
+  const carregando = c.dados === null;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharCalendario()">
+      <div class="modal modal-cal">
+        <div class="modal-header">
+          <div style="min-width:0"><div class="modal-title">${esc(e.nome)}</div>
+            <div style="font-size:12px;color:#9aa5b4">${e.tipo_contrato === 'Mensalista' ? 'Mensalista · fixo R$ ' + fmtBR(e.salario_fixo) : 'Diária R$ ' + fmtBR(e.valor_diaria)}</div></div>
+          <button class="btn" onclick="fecharCalendario()" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button>
+        </div>
+        <div class="cal-nav">
+          <button class="btn" onclick="mudarMesCal(-1)" aria-label="Mês anterior"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+          <div class="cal-mes">${MESES[c.mes - 1]} de ${c.ano}</div>
+          <button class="btn" onclick="mudarMesCal(1)" aria-label="Próximo mês"><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
+        </div>
+        <div class="cal-resumo">
+          <div><b>${carregando ? '…' : diasTrab}</b><span>dias trabalhados</span></div>
+          <div><b>${carregando ? '…' : 'R$ ' + fmtBR(totalMes)}</b><span>no mês</span></div>
+          <div><b>${carregando ? '…' : obrasOrd.length}</b><span>obra(s)</span></div>
+        </div>
+        <div class="cal-grade">${DIAS_SEM.map(d => `<div class="cal-sem">${d}</div>`).join('')}${cels}</div>
+        ${carregando ? '<div class="loading" style="height:60px"><div class="spinner"></div></div>' : ''}
+        ${detalhe || (diasTrab ? '<p class="cal-dica">Toque num dia marcado para ver os detalhes.</p>' : (carregando ? '' : '<p class="empty">Nenhum dia trabalhado neste mês.</p>'))}
+        ${legenda ? `<div class="cal-legenda">${legenda}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function fecharModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('login-form').onsubmit = handleLogin;
+  document.getElementById('btn-logout').addEventListener('click', logout);
+  document.querySelectorAll('.nav-item').forEach(el =>
+    el.addEventListener('click', () => navegar(el.dataset.tela))
+  );
+  if (window._TOKEN) { iniciarApp(); } else { mostrarLogin(); }
+});

@@ -193,7 +193,7 @@ function renderDash(main) {
 
   const maxF = Math.max(1, ...(d.funcionarios_mes || []).map(f => f.valor));
   const funcHTML = (d.funcionarios_mes || []).map(f => `
-    <div class="apto-item">
+    <div class="apto-item link-cal" onclick="abrirCalendarioPorNome('${esc(f.nome)}')" title="Ver dias trabalhados">
       <div class="av" style="background:#dbeafe;color:#1d4ed8">${esc(f.nome.replace(/^ENC\./, '').slice(0, 2).toUpperCase())}</div>
       <div class="apto-info" style="flex:1">
         <div class="apto-nome">${esc(f.nome)}</div>
@@ -589,7 +589,7 @@ function renderEquipePage(main) {
       <td>
         <div class="elet-cell">
           <div class="av" style="background:#dbeafe;color:#1d4ed8">${e.nome.slice(0, 2).toUpperCase()}</div>
-          <div><div style="font-size:13px;font-weight:500;color:var(--text-primary)">${esc(e.nome)}</div><div style="font-size:11px;color:var(--text-muted)">${esc(e.telefone || '')}</div></div>
+          <div class="link-cal" onclick="abrirCalendario(${e.id})" title="Ver dias trabalhados"><div style="font-size:13px;font-weight:500;color:var(--text-primary)">${esc(e.nome)} <i class="ti ti-calendar-event" aria-hidden="true" style="color:#9aa5b4;font-size:13px"></i></div><div style="font-size:11px;color:var(--text-muted)">${esc(e.telefone || '')}</div></div>
         </div>
       </td>
       <td><span class="badge ${fb[e.funcao] || ''}">${esc(e.funcao)}</span></td>
@@ -597,6 +597,7 @@ function renderEquipePage(main) {
       <td><span class="badge ${e.status === 'Ativo' ? 'b-g' : ''}">${esc(e.status)}</span></td>
       <td>
         <div style="display:flex;gap:4px;justify-content:flex-end">
+          <button class="btn" onclick="abrirCalendario(${e.id})" title="Dias"><i class="ti ti-calendar-event" aria-hidden="true"></i></button>
           <button class="btn" onclick="editarElet(${e.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
           <button class="btn" onclick="excluirElet(${e.id}, '${esc(e.nome)}')" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
         </div>
@@ -732,13 +733,13 @@ function renderOrcs(main) {
 
   const linhas = S.orcamentos.map(o => `
     <tr onclick="abrirOrc(${o.id})" style="cursor:pointer">
-      <td style="font-size:11px;color:var(--text-muted);font-family:monospace">${esc(o.numero || '')}</td>
-      <td style="font-size:13px;font-weight:500;color:var(--text-primary)">${esc(o.cliente_nome || '—')}</td>
-      <td style="font-size:11px;color:var(--text-muted)">${esc(o.obra_descricao || '—')}</td>
-      <td style="font-size:11px;color:var(--text-muted)">${fmtData(o.data)}</td>
-      <td style="text-align:right;font-size:13px;font-weight:500">R$ ${fmtBR(o.total)}</td>
-      <td><span class="badge ${bc[o.status] || ''}">${o.status}</span></td>
-      <td>
+      <td data-label="Nº" style="font-size:11px;color:var(--text-muted);font-family:monospace">${esc(o.numero || '')}</td>
+      <td class="td-titulo" style="font-size:13px;font-weight:500;color:var(--text-primary)">${esc(o.cliente_nome || '—')}</td>
+      <td data-label="Obra" style="font-size:11px;color:var(--text-muted)">${esc(o.obra_descricao || '—')}</td>
+      <td data-label="Data" style="font-size:11px;color:var(--text-muted)">${fmtData(o.data)}</td>
+      <td data-label="Total" class="td-destaque" style="text-align:right;font-size:13px;font-weight:500">R$ ${fmtBR(o.total)}</td>
+      <td data-label="Status"><span class="badge ${bc[o.status] || ''}">${o.status}</span></td>
+      <td class="td-acoes">
         <div style="display:flex;gap:4px;justify-content:flex-end">
           <button class="btn" onclick="event.stopPropagation();dupOrc(${o.id})" title="Duplicar"><i class="ti ti-copy" aria-hidden="true"></i></button>
           <button class="btn" onclick="event.stopPropagation();pdfOrc(${o.id})" title="PDF"><i class="ti ti-file-download" aria-hidden="true"></i></button>
@@ -760,7 +761,7 @@ function renderOrcs(main) {
         <div class="metric"><div class="metric-label">Rascunhos</div><div class="metric-val" style="color:var(--text-muted)">${rasc}</div></div>
       </div>
       <div class="table-card">
-        <table>
+        <table class="tbl-lista">
           <thead><tr><th>Nº</th><th>Cliente</th><th>Obra</th><th>Data</th><th style="text-align:right">Total</th><th>Status</th><th></th></tr></thead>
           <tbody>${linhas || '<tr><td colspan="7" class="empty">Nenhum orçamento</td></tr>'}</tbody>
         </table>
@@ -816,12 +817,12 @@ function imprimirPDF(orc) {
 
 function renderEditorOrc(main) {
   const o = S.orc; const t = totalOrc();
-  const linhas = (o.itens || []).map((it, i) => { const vt = (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0); return `<tr><td style="color:var(--text-muted);text-align:center;font-size:10px">${String(i + 1).padStart(2, '0')}</td><td><input class="inline-inp" value="${esc(it.descricao)}" oninput="updItem(${i},'descricao',this.value)" /></td><td><input class="inline-inp inp-sm" value="${esc(it.und)}" oninput="updItem(${i},'und',this.value)" /></td><td><input class="inline-inp inp-num" type="number" value="${it.qtd}" oninput="updItem(${i},'qtd',this.value)" /></td><td><input class="inline-inp inp-num" type="number" step="0.01" value="${it.vunit}" oninput="updItem(${i},'vunit',this.value)" /></td><td style="text-align:right"><span class="chip" id="chip-${i}">R$ ${fmtBR(vt)}</span></td><td><button class="btn-rem" onclick="delItem(${i})"><i class="ti ti-trash" aria-hidden="true"></i></button></td></tr>`; }).join('');
+  const linhas = (o.itens || []).map((it, i) => { const vt = (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0); return `<tr><td class="it-n" style="color:var(--text-muted);text-align:center;font-size:10px">${String(i + 1).padStart(2, '0')}</td><td class="it-desc"><input class="inline-inp" value="${esc(it.descricao)}" oninput="updItem(${i},'descricao',this.value)" /></td><td class="it-und" data-label="Und"><input class="inline-inp inp-sm" value="${esc(it.und)}" oninput="updItem(${i},'und',this.value)" /></td><td class="it-qtd" data-label="Qtd"><input class="inline-inp inp-num" type="number" value="${it.qtd}" oninput="updItem(${i},'qtd',this.value)" /></td><td class="it-vu" data-label="Vl unit"><input class="inline-inp inp-num" type="number" step="0.01" value="${it.vunit}" oninput="updItem(${i},'vunit',this.value)" /></td><td class="it-tot" style="text-align:right"><span class="chip" id="chip-${i}">R$ ${fmtBR(vt)}</span></td><td class="it-rem"><button class="btn-rem" onclick="delItem(${i})" aria-label="Remover item"><i class="ti ti-trash" aria-hidden="true"></i></button></td></tr>`; }).join('');
   main.innerHTML = `
-    <div class="editor-topbar">
+    <div class="editor-topbar editor-topbar-orc">
       <button class="btn-voltar" onclick="fecharOrc()"><i class="ti ti-arrow-left" aria-hidden="true"></i> Orçamentos</button>
-      <div style="flex:1"><div class="editor-titulo">${esc(o.cliente_nome || 'Novo orçamento')}</div><div style="font-size:11px;color:var(--text-muted)">${esc(o.numero || '')} · ${fmtData(o.data)}</div></div>
-      <div style="display:flex;gap:7px">
+      <div class="et-info" style="flex:1;min-width:0"><div class="editor-titulo">${esc(o.cliente_nome || 'Novo orçamento')}</div><div style="font-size:11px;color:var(--text-muted)">${esc(o.numero || '')} · ${fmtData(o.data)}</div></div>
+      <div class="et-acoes" style="display:flex;gap:7px">
         <button class="btn" onclick="pdfOrc(${o.id})"><i class="ti ti-file-download" aria-hidden="true"></i> PDF</button>
         <button class="btn btn-p" onclick="salvarOrc()"><i class="ti ti-device-floppy" aria-hidden="true"></i> Salvar</button>
       </div>
@@ -844,13 +845,13 @@ function renderEditorOrc(main) {
         <div class="card-title" style="margin-bottom:14px">Itens do orçamento</div>
         <div style="overflow-x:auto"><table class="itens-table">
           <thead><tr><th style="width:30px">Nº</th><th>Descrição</th><th style="width:60px;text-align:right">UND</th><th style="width:60px;text-align:right">Qtd</th><th style="width:90px;text-align:right">Vl unit</th><th style="width:100px;text-align:right">Vl total</th><th style="width:30px"></th></tr></thead>
-          <tbody>${linhas}<tr style="background:#ebf4ff;border-top:1.5px dashed #90c2f7"><td style="color:var(--text-muted);text-align:center;font-size:10px">—</td><td><input class="inline-inp" id="n-desc" placeholder="Nova descrição..." /></td><td><input class="inline-inp inp-sm" id="n-und" value="UND" /></td><td><input class="inline-inp inp-num" id="n-qtd" type="number" placeholder="0" oninput="prevItem()" /></td><td><input class="inline-inp inp-num" id="n-vunit" type="number" step="0.01" placeholder="0,00" oninput="prevItem()" /></td><td></td><td><button class="btn-add-item" onclick="addItem()">+</button></td></tr></tbody>
+          <tbody>${linhas}<tr class="it-novo" style="background:#ebf4ff;border-top:1.5px dashed #90c2f7"><td class="it-n" style="color:var(--text-muted);text-align:center;font-size:10px">+</td><td class="it-desc"><input class="inline-inp" id="n-desc" placeholder="Nova descrição..." /></td><td class="it-und" data-label="Und"><input class="inline-inp inp-sm" id="n-und" value="UND" /></td><td class="it-qtd" data-label="Qtd"><input class="inline-inp inp-num" id="n-qtd" type="number" placeholder="0" oninput="prevItem()" /></td><td class="it-vu" data-label="Vl unit"><input class="inline-inp inp-num" id="n-vunit" type="number" step="0.01" placeholder="0,00" oninput="prevItem()" /></td><td class="it-tot"></td><td class="it-rem"><button class="btn-add-item" onclick="addItem()" aria-label="Adicionar item">+</button></td></tr></tbody>
         </table></div>
         <div id="preview-bar"></div>
         <div class="total-bar"><span class="tl">Valor total</span><span class="tv">R$ ${fmtBR(t)}</span></div>
       </div>
       <div class="card"><div class="card-title" style="margin-bottom:10px">Observações</div><div class="field"><textarea oninput="updOrcCampo('obs',this.value)" placeholder="Ex: Prazo de execução: 30 dias.">${esc(o.obs)}</textarea></div></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:32px">
+      <div class="orc-rodape" style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:32px">
         <button class="btn" onclick="delOrc(${o.id})" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i> Excluir</button>
         <button class="btn" onclick="dupOrc(${o.id})"><i class="ti ti-copy" aria-hidden="true"></i> Duplicar</button>
         <button class="btn btn-p" onclick="salvarOrc()"><i class="ti ti-device-floppy" aria-hidden="true"></i> Salvar</button>
@@ -919,7 +920,7 @@ function renderFinanceiro(main) {
   const emps = S.emps.map(e => {
     const pct = Math.min(100, Math.round(e.pago_ate_hoje / e.valor_total * 100));
     const ini = new Date(e.inicio + 'T12:00:00');
-    return `<div class="obra-item">
+    return `<div class="obra-item emp-item">
       <div class="obra-dot" style="background:${e.quitado ? '#10b981' : '#f59e0b'}"></div>
       <div class="obra-info">
         <div class="obra-nome">${esc(e.eletricista_nome)} · ${esc(e.descricao)}</div>
@@ -930,7 +931,7 @@ function renderFinanceiro(main) {
         <div class="obra-val" style="color:${e.quitado ? '#15803d' : '#a16207'}">${e.quitado ? 'Quitado' : 'Falta R$ ' + fmtBR(e.restante)}</div>
         <div class="obra-pct">${e.quitado ? '' : e.parcelas_restantes + ' parcela(s)'}</div>
       </div>
-      <div style="display:flex;gap:4px;margin-left:8px">
+      <div class="emp-acoes" style="display:flex;gap:4px;margin-left:8px">
         <button class="btn" onclick="abrirModalEmp(${e.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
         <button class="btn" onclick="excluirEmp(${e.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
       </div>
@@ -1080,15 +1081,15 @@ function renderFolha(main) {
   const neg = v => v ? `<span style="color:#b91c1c">− ${fmtBR(v)}</span>` : '<span style="color:var(--text-muted)">—</span>';
   const linhas = f.linhas.map(l => `
     <tr>
-      <td><div style="font-weight:500;color:var(--text-primary)">${esc(l.nome)}</div>
+      <td class="td-titulo link-cal" onclick="abrirCalendario(${l.eletricista_id})" title="Ver dias trabalhados"><div style="font-weight:500;color:var(--text-primary)">${esc(l.nome)} <i class="ti ti-calendar-event" aria-hidden="true" style="color:#9aa5b4;font-size:13px"></i></div>
         <div style="font-size:11px;color:var(--text-muted)">${l.tipo_contrato === 'Mensalista' ? 'Mensalista' : l.dias + ' dia(s) apontado(s)'}</div></td>
-      <td style="text-align:right">${l.tipo_contrato === 'Mensalista' ? fmtBR(l.salario_fixo) + ' <span class="badge" style="font-size:10px">fixo</span>' : fmtBR(l.valor_diarias)}</td>
-      <td style="text-align:right">${l.adicionais ? '+ ' + fmtBR(l.adicionais) : '<span style="color:var(--text-muted)">—</span>'}</td>
-      <td style="text-align:right;font-weight:500">${fmtBR(l.bruto)}</td>
-      <td style="text-align:right">${neg(l.adiantamentos)}</td>
-      <td style="text-align:right">${neg(l.descontos)}</td>
-      <td style="text-align:right" title="${esc(l.parcelas_detalhe.join(' | '))}">${neg(l.parcelas)}</td>
-      <td style="text-align:right;font-weight:600;color:${l.a_receber < 0 ? '#b91c1c' : 'var(--text-primary)'}">R$ ${fmtBR(l.a_receber)}</td>
+      <td data-label="${l.tipo_contrato === 'Mensalista' ? 'Fixo' : 'Diárias'}" style="text-align:right">${l.tipo_contrato === 'Mensalista' ? fmtBR(l.salario_fixo) + ' <span class="badge" style="font-size:10px">fixo</span>' : fmtBR(l.valor_diarias)}</td>
+      <td data-label="Adicionais" class="${l.adicionais ? '' : 'td-vazio'}" style="text-align:right">${l.adicionais ? '+ ' + fmtBR(l.adicionais) : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td data-label="Bruto" style="text-align:right;font-weight:500">${fmtBR(l.bruto)}</td>
+      <td data-label="Adiantamentos" class="${l.adiantamentos ? '' : 'td-vazio'}" style="text-align:right">${neg(l.adiantamentos)}</td>
+      <td data-label="Descontos" class="${l.descontos ? '' : 'td-vazio'}" style="text-align:right">${neg(l.descontos)}</td>
+      <td data-label="Parcelas${l.parcelas_detalhe.length ? ' (' + esc(l.parcelas_detalhe.map(x => x.split(':')[0]).join(', ')) + ')' : ''}" class="${l.parcelas ? '' : 'td-vazio'}" style="text-align:right" title="${esc(l.parcelas_detalhe.join(' | '))}">${neg(l.parcelas)}</td>
+      <td data-label="A receber" class="td-destaque" style="text-align:right;font-weight:600;color:${l.a_receber < 0 ? '#b91c1c' : 'var(--text-primary)'}">R$ ${fmtBR(l.a_receber)}</td>
     </tr>`).join('');
 
   main.innerHTML = `
@@ -1108,13 +1109,13 @@ function renderFolha(main) {
         <div class="metric"><div class="metric-ico green"><i class="ti ti-wallet" aria-hidden="true"></i></div><div class="metric-label">A pagar</div><div class="metric-val" style="color:#15803d">R$ ${fmtBR(t.a_receber)}</div><div class="metric-sub">valor final a receber</div></div>
       </div>
       <div class="table-card" style="overflow-x:auto">
-        <table>
+        <table class="tbl-lista">
           <thead><tr><th>Funcionário</th><th style="text-align:right">Diárias / Fixo</th><th style="text-align:right">Adicionais</th><th style="text-align:right">Bruto</th><th style="text-align:right">Adiant.</th><th style="text-align:right">Descontos</th><th style="text-align:right">Parcelas</th><th style="text-align:right">A receber</th></tr></thead>
           <tbody>${linhas || '<tr><td colspan="8" class="empty">Nenhum movimento neste mês</td></tr>'}</tbody>
           ${f.linhas.length ? `<tfoot><tr style="font-weight:600;border-top:2px solid var(--border, #e5e7eb)">
-            <td>TOTAL</td><td style="text-align:right">${fmtBR((t.valor_diarias || 0) + (t.salario_fixo || 0))}</td><td style="text-align:right">${fmtBR(t.adicionais)}</td>
-            <td style="text-align:right">${fmtBR(t.bruto)}</td><td style="text-align:right">${fmtBR(t.adiantamentos)}</td><td style="text-align:right">${fmtBR(t.descontos)}</td>
-            <td style="text-align:right">${fmtBR(t.parcelas)}</td><td style="text-align:right">R$ ${fmtBR(t.a_receber)}</td></tr></tfoot>` : ''}
+            <td class="td-titulo">TOTAL DA FOLHA</td><td data-label="Diárias + fixos" style="text-align:right">${fmtBR((t.valor_diarias || 0) + (t.salario_fixo || 0))}</td><td data-label="Adicionais" style="text-align:right">${fmtBR(t.adicionais)}</td>
+            <td data-label="Bruto" style="text-align:right">${fmtBR(t.bruto)}</td><td data-label="Adiantamentos" style="text-align:right">${fmtBR(t.adiantamentos)}</td><td data-label="Descontos" style="text-align:right">${fmtBR(t.descontos)}</td>
+            <td data-label="Parcelas" style="text-align:right">${fmtBR(t.parcelas)}</td><td data-label="A receber" class="td-destaque" style="text-align:right">R$ ${fmtBR(t.a_receber)}</td></tr></tfoot>` : ''}
         </table>
       </div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Mensalistas recebem só o fixo + adicionais (diárias lançadas para eles servem apenas para o custo das obras). Passe o mouse em "Parcelas" para ver o detalhe dos empréstimos.</p>
@@ -1447,6 +1448,118 @@ async function abrirHistFerr(id) {
           <thead><tr><th>Data</th><th style="text-align:center">Qtd</th><th>Movimento</th><th>Obs.</th></tr></thead>
           <tbody>${linhas || '<tr><td colspan="4" class="empty">Sem movimentações</td></tr>'}</tbody>
         </table></div>
+      </div>
+    </div>`;
+}
+
+// ── CALENDÁRIO DO FUNCIONÁRIO (dias trabalhados no mês) ───────
+const CORES_OBRA = ['#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#64748b'];
+const DIAS_SEM = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function abrirCalendario(eid, ano, mes) {
+  const e = S.eletricistas.find(x => x.id === eid);
+  if (!e) { toast('Funcionário não encontrado', 'erro'); return; }
+  S.cal = { eid, ano: ano || S.finAno, mes: mes || S.finMes, dados: null, dia: null };
+  renderCalendario();
+  carregarCalendario();
+}
+function abrirCalendarioPorNome(nome) {
+  const e = S.eletricistas.find(x => x.nome === nome);
+  if (e) abrirCalendario(e.id);
+}
+
+async function carregarCalendario() {
+  const c = S.cal; if (!c) return;
+  const ini = `${c.ano}-${String(c.mes).padStart(2, '0')}-01`;
+  const ult = new Date(c.ano, c.mes, 0).getDate();
+  const fim = `${c.ano}-${String(c.mes).padStart(2, '0')}-${ult}`;
+  try {
+    const lista = await req('GET', `/apontamentos/?eletricista_id=${c.eid}&data_inicio=${ini}&data_fim=${fim}`) || [];
+    if (S.cal !== c) return;              // usuário já fechou ou trocou
+    c.dados = lista; renderCalendario();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+function mudarMesCal(delta) {
+  const c = S.cal; let m = c.mes + delta, a = c.ano;
+  if (m < 1) { m = 12; a--; } if (m > 12) { m = 1; a++; }
+  c.mes = m; c.ano = a; c.dados = null; c.dia = null; renderCalendario(); carregarCalendario();
+}
+function selecionarDiaCal(d) { S.cal.dia = S.cal.dia === d ? null : d; renderCalendario(); }
+function fecharCalendario() { S.cal = null; fecharModal(); }
+
+function renderCalendario() {
+  const c = S.cal; if (!c) return;
+  const e = S.eletricistas.find(x => x.id === c.eid) || { nome: '' };
+  const porDia = {};
+  (c.dados || []).forEach(a => { porDia[+a.data.slice(8, 10)] = a; });
+
+  // cor fixa por obra dentro do mês (a que tem mais gasto fica azul)
+  const totObra = {};
+  (c.dados || []).forEach(a => a.itens.forEach(i => { totObra[i.obra_nome] = (totObra[i.obra_nome] || 0) + i.valor; }));
+  const obrasOrd = Object.keys(totObra).sort((a, b) => totObra[b] - totObra[a]);
+  const cor = n => CORES_OBRA[obrasOrd.indexOf(n) % CORES_OBRA.length] || '#64748b';
+
+  const totalMes = (c.dados || []).reduce((s, a) => s + a.total_dia, 0);
+  const diasTrab = (c.dados || []).length;
+  const hoje = new Date(); const ehHoje = d => hoje.getFullYear() === c.ano && hoje.getMonth() + 1 === c.mes && hoje.getDate() === d;
+
+  const primeiroDia = new Date(c.ano, c.mes - 1, 1).getDay();
+  const nDias = new Date(c.ano, c.mes, 0).getDate();
+  let cels = '';
+  for (let i = 0; i < primeiroDia; i++) cels += '<div class="cal-cel cal-vazia"></div>';
+  for (let d = 1; d <= nDias; d++) {
+    const a = porDia[d]; const sem = (primeiroDia + d - 1) % 7; const fds = sem === 0 || sem === 6;
+    const obras = a ? a.itens : [];
+    const barras = obras.map(i => `<span class="cal-barra" style="background:${cor(i.obra_nome)}" title="${esc(i.obra_nome)}"></span>`).join('');
+    const nomeObra = obras.length ? `<span class="cal-obra">${esc(obras.length > 1 ? obras.length + ' obras' : obras[0].obra_nome)}</span>` : '';
+    cels += `<button class="cal-cel ${a ? 'cal-trab' : ''} ${fds ? 'cal-fds' : ''} ${c.dia === d ? 'cal-sel' : ''} ${ehHoje(d) ? 'cal-hoje' : ''}" ${a ? `onclick="selecionarDiaCal(${d})"` : 'disabled'}
+      style="${a ? `--cor:${cor(obras[0]?.obra_nome)}` : ''}">
+      <span class="cal-num">${d}</span>
+      ${a ? `<span class="cal-val">${fmtBR(a.total_dia).replace(',00', '')}</span>${nomeObra}<span class="cal-barras">${barras}</span>` : ''}
+    </button>`;
+  }
+
+  const legenda = obrasOrd.map(n => {
+    const dias = (c.dados || []).filter(a => a.itens.some(i => i.obra_nome === n)).length;
+    return `<div class="cal-leg"><span class="cal-leg-cor" style="background:${cor(n)}"></span><span class="cal-leg-nome">${esc(n)}</span><span class="cal-leg-val">${dias} dia(s) · R$ ${fmtBR(totObra[n])}</span></div>`;
+  }).join('');
+
+  let detalhe = '';
+  if (c.dia && porDia[c.dia]) {
+    const a = porDia[c.dia];
+    const dt = new Date(c.ano, c.mes - 1, c.dia);
+    detalhe = `<div class="cal-detalhe">
+      <div class="cal-det-tit">${DIAS_SEM[dt.getDay()]}, ${c.dia}/${String(c.mes).padStart(2, '0')}/${c.ano}<span>R$ ${fmtBR(a.total_dia)}</span></div>
+      ${a.itens.map(i => `<div class="cal-det-lin"><span><span class="cal-leg-cor" style="background:${cor(i.obra_nome)}"></span>${esc(i.obra_nome)}</span><b>R$ ${fmtBR(i.valor)}</b></div>`).join('')}
+      ${a.adicionais.map(x => `<div class="cal-det-lin"><span>+ ${esc(x.tipo_label)}${x.descricao ? ': ' + esc(x.descricao) : ''}</span><b>R$ ${fmtBR(x.valor)}</b></div>`).join('')}
+      ${a.observacao ? `<div class="cal-det-obs">${esc(a.observacao)}</div>` : ''}
+    </div>`;
+  }
+
+  const carregando = c.dados === null;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharCalendario()">
+      <div class="modal modal-cal">
+        <div class="modal-header">
+          <div style="min-width:0"><div class="modal-title">${esc(e.nome)}</div>
+            <div style="font-size:12px;color:#9aa5b4">${e.tipo_contrato === 'Mensalista' ? 'Mensalista · fixo R$ ' + fmtBR(e.salario_fixo) : 'Diária R$ ' + fmtBR(e.valor_diaria)}</div></div>
+          <button class="btn" onclick="fecharCalendario()" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button>
+        </div>
+        <div class="cal-nav">
+          <button class="btn" onclick="mudarMesCal(-1)" aria-label="Mês anterior"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+          <div class="cal-mes">${MESES[c.mes - 1]} de ${c.ano}</div>
+          <button class="btn" onclick="mudarMesCal(1)" aria-label="Próximo mês"><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
+        </div>
+        <div class="cal-resumo">
+          <div><b>${carregando ? '…' : diasTrab}</b><span>dias trabalhados</span></div>
+          <div><b>${carregando ? '…' : 'R$ ' + fmtBR(totalMes)}</b><span>no mês</span></div>
+          <div><b>${carregando ? '…' : obrasOrd.length}</b><span>obra(s)</span></div>
+        </div>
+        <div class="cal-grade">${DIAS_SEM.map(d => `<div class="cal-sem">${d}</div>`).join('')}${cels}</div>
+        ${carregando ? '<div class="loading" style="height:60px"><div class="spinner"></div></div>' : ''}
+        ${detalhe || (diasTrab ? '<p class="cal-dica">Toque num dia marcado para ver os detalhes.</p>' : (carregando ? '' : '<p class="empty">Nenhum dia trabalhado neste mês.</p>'))}
+        ${legenda ? `<div class="cal-legenda">${legenda}</div>` : ''}
       </div>
     </div>`;
 }
