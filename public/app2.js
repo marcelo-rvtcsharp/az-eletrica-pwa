@@ -107,6 +107,7 @@ function renderMain() {
     case 'financeiro': carregarFinanceiro(); break;
     case 'folha': carregarFolha(); break;
     case 'despesas': carregarDespesas(); break;
+    case 'ferramentas': carregarFerramentas(); break;
   }
 }
 
@@ -1225,6 +1226,185 @@ async function excluirDesp(id) {
   if (!confirm('Excluir esta despesa?')) return;
   try { await req('DELETE', `/despesas/${id}`); toast('Excluída!'); carregarDespesas(); }
   catch (err) { toast(err.message, 'erro'); }
+}
+
+// ── FERRAMENTAS (onde está cada unidade) ───────────────────────
+async function carregarFerramentas() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'ferramentas' || !main) return;
+  if (!S.ferr) main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
+  try { S.ferr = await req('GET', '/ferramentas/') || []; renderFerramentas(main); }
+  catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function chipLocal(nome, qtd, cor) {
+  return `<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;background:${cor};margin:2px 4px 2px 0;white-space:nowrap">
+    ${esc(nome)} <b>${qtd}</b></span>`;
+}
+
+function renderFerramentas(main) {
+  const filtro = S.ferrFiltro ?? '';          // '' = todas, 'dep' = depósito, id = obra
+  const busca = (S.ferrBusca || '').toLowerCase();
+  let lista = (S.ferr || []).filter(f => !busca || f.nome.toLowerCase().includes(busca));
+  if (filtro === 'dep') lista = lista.filter(f => f.deposito > 0);
+  else if (filtro) lista = lista.filter(f => f.locais.some(l => l.obra_id === +filtro));
+
+  const obrasComFerr = {};
+  (S.ferr || []).forEach(f => f.locais.forEach(l => { obrasComFerr[l.obra_id] = (obrasComFerr[l.obra_id] || 0) + l.quantidade; }));
+  const totalUn = (S.ferr || []).reduce((a, f) => a + f.quantidade_total, 0);
+  const emObras = (S.ferr || []).reduce((a, f) => a + f.em_obras, 0);
+
+  const linhas = lista.map(f => {
+    const chips = (f.deposito > 0 ? chipLocal('Depósito', f.deposito, '#e5e7eb') : '') +
+      f.locais.map(l => chipLocal(l.obra_nome, l.quantidade, (filtro && +filtro === l.obra_id) ? '#fde68a' : '#dbeafe')).join('');
+    return `<tr>
+      <td><div style="font-weight:500;color:var(--text-primary)">${esc(f.nome)}</div>
+        ${f.observacao ? `<div style="font-size:11px;color:var(--text-muted)">${esc(f.observacao)}</div>` : ''}</td>
+      <td style="text-align:center;font-weight:600">${f.quantidade_total}</td>
+      <td>${chips || '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td><div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-p" onclick="abrirModalMover(${f.id})" title="Mover"><i class="ti ti-arrows-exchange" aria-hidden="true"></i> Mover</button>
+        <button class="btn" onclick="abrirHistFerr(${f.id})" title="Histórico"><i class="ti ti-history" aria-hidden="true"></i></button>
+        <button class="btn" onclick="abrirModalFerr(${f.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+        <button class="btn" onclick="excluirFerr(${f.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div></td></tr>`;
+  }).join('');
+
+  const opcoesFiltro = `<option value="">Todos os locais</option><option value="dep" ${filtro === 'dep' ? 'selected' : ''}>Depósito</option>` +
+    S.obras.filter(o => obrasComFerr[o.id]).sort((a, b) => a.nome.localeCompare(b.nome))
+      .map(o => `<option value="${o.id}" ${String(filtro) === String(o.id) ? 'selected' : ''}>${esc(o.nome)} (${obrasComFerr[o.id]})</option>`).join('');
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Ferramentas</div><div class="topbar-sub">${(S.ferr || []).length} ferramenta(s) · ${totalUn} unidade(s)</div></div>
+      <div style="display:flex;gap:8px"><button class="btn btn-p" onclick="abrirModalFerr()"><i class="ti ti-plus" aria-hidden="true"></i> Nova ferramenta</button></div>
+    </div>
+    <div class="content">
+      <div class="metrics">
+        <div class="metric"><div class="metric-ico blue"><i class="ti ti-tool" aria-hidden="true"></i></div><div class="metric-label">Unidades</div><div class="metric-val">${totalUn}</div><div class="metric-sub">${(S.ferr || []).length} tipo(s) de ferramenta</div></div>
+        <div class="metric"><div class="metric-ico green"><i class="ti ti-building-warehouse" aria-hidden="true"></i></div><div class="metric-label">No depósito</div><div class="metric-val">${totalUn - emObras}</div><div class="metric-sub">disponíveis</div></div>
+        <div class="metric"><div class="metric-ico amber"><i class="ti ti-building-factory-2" aria-hidden="true"></i></div><div class="metric-label">Em obras</div><div class="metric-val">${emObras}</div><div class="metric-sub">em ${Object.keys(obrasComFerr).length} obra(s)</div></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <input placeholder="Buscar ferramenta..." value="${esc(S.ferrBusca || '')}" oninput="S.ferrBusca=this.value;renderFerramentas(document.getElementById('main'));this.focus();this.setSelectionRange(this.value.length,this.value.length)" style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border,#d1d5db);border-radius:8px" />
+        <select onchange="S.ferrFiltro=this.value;renderFerramentas(document.getElementById('main'))" style="min-width:220px;padding:8px;border:1px solid var(--border,#d1d5db);border-radius:8px">${opcoesFiltro}</select>
+      </div>
+      <div class="table-card" style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Ferramenta</th><th style="text-align:center">Qtd</th><th>Onde está</th><th></th></tr></thead>
+          <tbody>${linhas || `<tr><td colspan="4" class="empty">${(S.ferr || []).length ? 'Nenhuma ferramenta neste filtro' : 'Nenhuma ferramenta cadastrada. Clique em "Nova ferramenta".'}</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function abrirModalFerr(id) {
+  const f = id ? S.ferr.find(x => x.id === id) : null;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${f ? 'Editar ferramenta' : 'Nova ferramenta'}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Nome *</label><input id="mf-nome" value="${esc(f?.nome || '')}" placeholder="Ex: Escada 7 degraus, Martelete rompedor" /></div>
+        <div class="field"><label>Quantidade total *</label><input id="mf-qtd" type="number" min="1" value="${f?.quantidade_total || 1}" /></div>
+        <div class="field"><label>Observação</label><input id="mf-obs" value="${esc(f?.observacao || '')}" placeholder="Ex: marca, voltagem, nº de série" /></div>
+        ${f ? '' : '<p style="font-size:12px;color:var(--text-muted);margin:0">Ao cadastrar, todas as unidades ficam no Depósito. Depois use "Mover" para mandar para as obras.</p>'}
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarFerr(${f?.id || 'null'})">${f ? 'Salvar' : 'Cadastrar'}</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById('mf-nome')?.focus(), 50);
+}
+
+async function salvarFerr(id) {
+  const data = { nome: document.getElementById('mf-nome').value.trim(), quantidade_total: parseInt(document.getElementById('mf-qtd').value) || 0, observacao: document.getElementById('mf-obs').value.trim() || null };
+  if (!data.nome || data.quantidade_total < 1) { toast('Preencha o nome e a quantidade', 'erro'); return; }
+  try {
+    await req(id ? 'PUT' : 'POST', id ? `/ferramentas/${id}` : '/ferramentas/', data);
+    fecharModal(); toast(id ? 'Ferramenta atualizada!' : 'Ferramenta cadastrada!'); carregarFerramentas();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirFerr(id) {
+  const f = S.ferr.find(x => x.id === id);
+  if (!confirm(`Excluir "${f?.nome}"? O histórico de movimentações também será apagado.`)) return;
+  try { await req('DELETE', `/ferramentas/${id}`); toast('Excluída!'); carregarFerramentas(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+function abrirModalMover(id) {
+  const f = S.ferr.find(x => x.id === id);
+  const origens = [];
+  if (f.deposito > 0) origens.push({ v: '', n: `Depósito (${f.deposito} disp.)`, q: f.deposito });
+  f.locais.forEach(l => origens.push({ v: l.obra_id, n: `${l.obra_nome} (${l.quantidade})`, q: l.quantidade }));
+  if (!origens.length) { toast('Nenhuma unidade disponível', 'erro'); return; }
+  const obrasOrd = [...S.obras].sort((a, b) => a.nome.localeCompare(b.nome));
+  const filtroObra = S.ferrFiltro && S.ferrFiltro !== 'dep' ? +S.ferrFiltro : null;
+  // origem padrão: o filtro (se a ferramenta estiver lá) ou o depósito; destino padrão: depósito se vier de obra
+  const origemPadrao = filtroObra && f.locais.some(l => l.obra_id === filtroObra) ? filtroObra : origens[0].v;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">Mover · ${esc(f.nome)}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="form-grid2">
+          <div class="field"><label>De *</label><select id="mm-de" onchange="ajustarMaxMover()">${origens.map(o => `<option value="${o.v}" data-q="${o.q}" ${String(o.v) === String(origemPadrao) ? 'selected' : ''}>${esc(o.n)}</option>`).join('')}</select></div>
+          <div class="field"><label>Para *</label><select id="mm-para"><option value="">Depósito</option>${obrasOrd.map(o => `<option value="${o.id}">${esc(o.nome)}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Quantidade *</label><input id="mm-qtd" type="number" min="1" value="1" /></div>
+          <div class="field"><label>Data</label><input id="mm-data" type="date" value="${new Date().toISOString().slice(0, 10)}" /></div>
+        </div>
+        <div class="field"><label>Observação</label><input id="mm-obs" placeholder="Ex: levou o Wesley, voltou com defeito..." /></div>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="moverFerr(${f.id})"><i class="ti ti-arrows-exchange" aria-hidden="true"></i> Mover</button>
+        </div>
+      </div>
+    </div>`;
+  if (origemPadrao === '' && filtroObra) document.getElementById('mm-para').value = filtroObra;   // filtrando uma obra: sugere mandar pra ela
+  ajustarMaxMover();
+}
+
+function ajustarMaxMover() {
+  const de = document.getElementById('mm-de'); const q = +de.selectedOptions[0].dataset.q;
+  const inp = document.getElementById('mm-qtd'); inp.max = q; if (+inp.value > q) inp.value = q;
+  const para = document.getElementById('mm-para');
+  if (de.value && para.value === de.value) para.value = '';          // vindo de obra: sugere voltar ao depósito
+  if (!de.value && !para.value) { const op = [...para.options].find(o => o.value); if (op) para.value = op.value; }
+}
+
+async function moverFerr(id) {
+  const de = document.getElementById('mm-de').value, para = document.getElementById('mm-para').value;
+  const body = {
+    quantidade: parseInt(document.getElementById('mm-qtd').value) || 0,
+    origem_obra_id: de ? +de : null, destino_obra_id: para ? +para : null,
+    data: document.getElementById('mm-data').value || null,
+    observacao: document.getElementById('mm-obs').value.trim() || null,
+  };
+  if (body.quantidade < 1) { toast('Informe a quantidade', 'erro'); return; }
+  if (de === para) { toast('Origem e destino são o mesmo lugar', 'erro'); return; }
+  try { await req('POST', `/ferramentas/${id}/mover`, body); fecharModal(); toast('Ferramenta movida!'); carregarFerramentas(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+async function abrirHistFerr(id) {
+  const f = S.ferr.find(x => x.id === id);
+  let hist = [];
+  try { hist = await req('GET', `/ferramentas/${id}/historico`) || []; } catch (err) { toast(err.message, 'erro'); return; }
+  const linhas = hist.map(h => `<tr><td>${fmtData(h.data)}</td><td style="text-align:center">${h.quantidade}</td>
+    <td>${esc(h.origem)} <i class="ti ti-arrow-right" aria-hidden="true"></i> <b>${esc(h.destino)}</b></td>
+    <td style="color:var(--text-muted)">${esc(h.observacao || '')}</td></tr>`).join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal" style="max-width:640px">
+        <div class="modal-header"><span class="modal-title">Histórico · ${esc(f.nome)}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div style="max-height:60vh;overflow:auto"><table>
+          <thead><tr><th>Data</th><th style="text-align:center">Qtd</th><th>Movimento</th><th>Obs.</th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="4" class="empty">Sem movimentações</td></tr>'}</tbody>
+        </table></div>
+      </div>
+    </div>`;
 }
 
 function fecharModal() { document.getElementById('modal-root').innerHTML = ''; }
