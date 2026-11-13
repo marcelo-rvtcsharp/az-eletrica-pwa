@@ -31,7 +31,7 @@ function toast(msg, tipo) {
   el._t = setTimeout(() => el.classList.remove('show'), 3500);
 }
 
-const S = { tela: 'dashboard', orc: null, obras: [], eletricistas: [], orcamentos: [], dash: null };
+const S = { tela: 'dashboard', orc: null, obras: [], eletricistas: [], orcamentos: [], dash: null, finAno: new Date().getFullYear(), finMes: new Date().getMonth() + 1 };
 
 function mostrarLogin() {
   document.getElementById('app').style.display = 'none';
@@ -75,14 +75,13 @@ function iniciarApp() {
 
 async function carregarDados() {
   try {
-    const [obras, elet, orcs, dash] = await Promise.all([
-      req('GET', '/obras/'), req('GET', '/eletricistas/'),
-      req('GET', '/orcamentos/'), req('GET', '/dashboard/'),
+    const [obras, elet, orcs] = await Promise.all([
+      req('GET', '/obras/'), req('GET', '/eletricistas/'), req('GET', '/orcamentos/'),
     ]);
     if (!obras) return;
     S.obras = obras || []; S.eletricistas = elet || [];
-    S.orcamentos = orcs || []; S.dash = dash;
-    renderMain();
+    S.orcamentos = orcs || [];
+    if (S.tela !== 'dashboard') renderMain();   // o dashboard busca os próprios dados
   } catch (err) { toast('Erro ao carregar: ' + err.message, 'erro'); }
 }
 
@@ -91,6 +90,7 @@ function navegar(tela) {
   document.querySelectorAll('.nav-item').forEach(el =>
     el.classList.toggle('active', el.dataset.tela === tela)
   );
+  if (tela === 'dashboard') { carregarDash(); return; }   // sempre busca números atualizados
   renderMain();
 }
 
@@ -106,6 +106,7 @@ function renderMain() {
     case 'apontamentos': renderApontamentos(main); break;
     case 'financeiro': carregarFinanceiro(); break;
     case 'folha': carregarFolha(); break;
+    case 'despesas': carregarDespesas(); break;
   }
 }
 
@@ -113,15 +114,56 @@ function renderMain() {
 function renderDash(main) {
   const d = S.dash;
   if (!d) { main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>'; return; }
+  const m = d.mes || {};
+  const c = d.custos || {};
+  const per = d.periodo || { ano: S.finAno, mes: S.finMes };
+  const nomeMes = `${MESES[per.mes - 1]} de ${per.ano}`;
+  const corSit = s => s === 'negativo' ? ['#ef4444', '#b91c1c'] : s === 'atencao' ? ['#f59e0b', '#a16207'] : ['#10b981', '#15803d'];
 
-  const obrasHTML = (d.obras?.lista || []).map(o => {
-    const cor = o.situacao === 'negativo' ? '#ef4444' : o.situacao === 'atencao' ? '#f59e0b' : '#10b981';
-    const corTxt = o.situacao === 'negativo' ? '#b91c1c' : o.situacao === 'atencao' ? '#a16207' : '#15803d';
+  let varTxt = 'sem lançamentos no mês anterior';
+  if (m.total_mes_anterior) {
+    const v = (m.total_diarias - m.total_mes_anterior) / m.total_mes_anterior * 100;
+    varTxt = `${v >= 0 ? '▲' : '▼'} ${Math.abs(v).toFixed(0)}% vs mês anterior (R$ ${fmtBR(m.total_mes_anterior)})`;
+  }
+
+  const maxObra = Math.max(1, ...(d.obras_mes || []).map(o => o.gasto_mes));
+  const obrasMesHTML = (d.obras_mes || []).map((o, i) => {
+    const [cor, corTxt] = corSit(o.situacao);
+    const contrato = o.valor_contratado > 0
+      ? `contrato: ${o.percentual}% consumido · saldo <b style="color:${corTxt}">R$ ${fmtBR(o.saldo)}</b>`
+      : `<span style="color:#b91c1c">sem contrato · total gasto R$ ${fmtBR(o.total_gasto)}</span>`;
+    return `<div class="obra-item">
+      <div style="width:22px;font-size:12px;color:var(--text-muted);font-weight:600">${i + 1}º</div>
+      <div class="obra-info">
+        <div class="obra-nome">${esc(o.nome)}</div>
+        <div class="obra-loc">${contrato}</div>
+        <div class="prog"><div class="prog-fill" style="width:${o.gasto_mes / maxObra * 100}%;background:#1d4ed8"></div></div>
+      </div>
+      <div class="obra-saldo">
+        <div class="obra-val">R$ ${fmtBR(o.gasto_mes)}</div>
+        <div class="obra-pct">${o.perc_do_mes}% do mês</div>
+      </div>
+    </div>`;
+  }).join('') || '<p class="empty">Nenhum lançamento neste mês</p>';
+
+  const maxF = Math.max(1, ...(d.funcionarios_mes || []).map(f => f.valor));
+  const funcHTML = (d.funcionarios_mes || []).map(f => `
+    <div class="apto-item">
+      <div class="av" style="background:#dbeafe;color:#1d4ed8">${esc(f.nome.replace(/^ENC\./, '').slice(0, 2).toUpperCase())}</div>
+      <div class="apto-info" style="flex:1">
+        <div class="apto-nome">${esc(f.nome)}</div>
+        <div class="prog" style="margin-top:4px"><div class="prog-fill" style="width:${f.valor / maxF * 100}%;background:#f59e0b"></div></div>
+      </div>
+      <div class="apto-r"><div class="apto-val">R$ ${fmtBR(f.valor)}</div><div class="apto-data">${f.dias} dia(s) · ${f.perc_do_mes}%</div></div>
+    </div>`).join('') || '<p class="empty">Nenhum lançamento neste mês</p>';
+
+  const geralHTML = (d.obras?.lista || []).filter(o => o.valor_contratado > 0).map(o => {
+    const [cor, corTxt] = corSit(o.situacao);
     return `<div class="obra-item">
       <div class="obra-dot" style="background:${cor}"></div>
       <div class="obra-info">
         <div class="obra-nome">${esc(o.nome)}</div>
-        <div class="obra-loc">${esc(o.cidade || '')} · ${esc(o.cliente || '')}</div>
+        <div class="obra-loc">contrato R$ ${fmtBR(o.valor_contratado)} · gasto R$ ${fmtBR(o.total_gasto)}</div>
         <div class="prog"><div class="prog-fill" style="width:${Math.min(o.percentual, 100)}%;background:${cor}"></div></div>
       </div>
       <div class="obra-saldo">
@@ -129,62 +171,84 @@ function renderDash(main) {
         <div class="obra-pct">${o.percentual}% consumido</div>
       </div>
     </div>`;
-  }).join('') || '<p class="empty">Nenhuma obra ativa</p>';
+  }).join('') || '<p class="empty">Nenhuma obra com contrato</p>';
 
-  const ultHTML = (d.ultimos_apontamentos || []).slice(0, 5).map(a => `
+  const ultHTML = (d.ultimos_apontamentos || []).slice(0, 8).map(a => `
     <div class="apto-item">
-      <div class="av" style="background:#dbeafe;color:#1d4ed8">${(a.eletricista || '?').slice(0, 2).toUpperCase()}</div>
+      <div class="av" style="background:#dbeafe;color:#1d4ed8">${esc((a.eletricista || '?').replace(/^ENC\./, '').slice(0, 2).toUpperCase())}</div>
       <div class="apto-info"><div class="apto-nome">${esc(a.eletricista)}</div><div class="apto-obra">${esc(a.obra)}</div></div>
       <div class="apto-r"><div class="apto-val">R$ ${fmtBR(a.valor)}</div><div class="apto-data">${fmtData(a.data)}</div></div>
-    </div>`).join('') || '<p class="empty">Nenhum apontamento</p>';
+    </div>`).join('') || '<p class="empty">Nenhum apontamento neste mês</p>';
 
   main.innerHTML = `
     <div class="topbar">
-      <div><div class="topbar-title">Dashboard</div><div class="topbar-sub">${new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
+      <div><div class="topbar-title">Dashboard</div><div class="topbar-sub">${nomeMes}${per.mes_atual ? ' · mês atual' : ''}</div></div>
       <div style="display:flex;gap:8px">
-        <button class="btn" onclick="carregarDados()"><i class="ti ti-refresh" aria-hidden="true"></i> Atualizar</button>
+        <button class="btn" onclick="carregarDados();carregarDash()"><i class="ti ti-refresh" aria-hidden="true"></i> Atualizar</button>
         <button class="btn btn-p" onclick="navegar('apontamentos')"><i class="ti ti-plus" aria-hidden="true"></i> Apontar diária</button>
       </div>
     </div>
     <div class="content">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+        ${seletorMes('carregarDash')}
+        ${per.mes_atual ? '' : '<button class="btn" onclick="irMesAtual()"><i class="ti ti-calendar" aria-hidden="true"></i> Mês atual</button>'}
+      </div>
       <div class="metrics">
         <div class="metric">
           <div class="metric-ico blue"><i class="ti ti-currency-real" aria-hidden="true"></i></div>
-          <div class="metric-label">Diárias semana</div>
-          <div class="metric-val">R$ ${fmtBR(d.semana?.total_diarias)}</div>
-          <div class="metric-sub">${d.semana?.inicio || ''} → ${d.semana?.fim || ''}</div>
+          <div class="metric-label">Mão de obra no mês</div>
+          <div class="metric-val">R$ ${fmtBR(m.total_diarias)}</div>
+          <div class="metric-sub">${varTxt}</div>
         </div>
         <div class="metric">
-          <div class="metric-ico amber"><i class="ti ti-building-factory-2" aria-hidden="true"></i></div>
-          <div class="metric-label">Obras ativas</div>
-          <div class="metric-val">${d.obras?.ativas || 0}</div>
-          <div class="metric-sub">${d.obras?.atencao || 0} em atenção</div>
+          <div class="metric-ico amber"><i class="ti ti-tools-kitchen-2" aria-hidden="true"></i></div>
+          <div class="metric-label">Alimentação + outros custos</div>
+          <div class="metric-val">R$ ${fmtBR((c.alimentacao || 0) + (c.outros || 0))}</div>
+          <div class="metric-sub">alimentação R$ ${fmtBR(c.alimentacao)} · outros R$ ${fmtBR(c.outros)}</div>
         </div>
         <div class="metric">
-          <div class="metric-ico green"><i class="ti ti-trending-up" aria-hidden="true"></i></div>
-          <div class="metric-label">Saldo geral</div>
-          <div class="metric-val" style="color:#15803d">R$ ${fmtBR(d.obras?.saldo_geral)}</div>
-          <div class="metric-sub">receita – custo</div>
+          <div class="metric-ico green"><i class="ti ti-sum" aria-hidden="true"></i></div>
+          <div class="metric-label">Custo total do mês</div>
+          <div class="metric-val">R$ ${fmtBR(c.total)}</div>
+          <div class="metric-sub">${m.lancamentos || 0} diárias em ${m.dias_com_lancamento || 0} dia(s) · ${m.funcionarios || 0} pessoa(s)</div>
         </div>
         <div class="metric">
           <div class="metric-ico red"><i class="ti ti-alert-triangle" aria-hidden="true"></i></div>
-          <div class="metric-label">Obras negativas</div>
-          <div class="metric-val" style="color:#b91c1c">${d.obras?.negativas || 0}</div>
-          <div class="metric-sub">estourou o orçamento</div>
+          <div class="metric-label">Saldo geral dos contratos</div>
+          <div class="metric-val" style="color:${(d.obras?.saldo_geral || 0) >= 0 ? '#15803d' : '#b91c1c'}">R$ ${fmtBR(d.obras?.saldo_geral)}</div>
+          <div class="metric-sub">${d.obras?.negativas || 0} estourada(s) · ${d.obras?.atencao || 0} em atenção · ${d.obras?.sem_contrato || 0} sem contrato</div>
         </div>
       </div>
       <div class="row2">
         <div class="card">
-          <div class="card-header"><span class="card-title"><i class="ti ti-building-factory-2" aria-hidden="true"></i> Desempenho por obra</span></div>
-          ${obrasHTML}
+          <div class="card-header"><span class="card-title"><i class="ti ti-building-factory-2" aria-hidden="true"></i> Gasto por obra · ${MESES[per.mes - 1]}</span></div>
+          ${obrasMesHTML}
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-title"><i class="ti ti-clock-check" aria-hidden="true"></i> Últimos apontamentos</span></div>
+          <div class="card-header"><span class="card-title"><i class="ti ti-users" aria-hidden="true"></i> Gasto por funcionário · ${MESES[per.mes - 1]}</span></div>
+          ${funcHTML}
+        </div>
+      </div>
+      <div class="row2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-header"><span class="card-title"><i class="ti ti-chart-bar" aria-hidden="true"></i> Contratos (acumulado até hoje)</span></div>
+          ${geralHTML}
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title"><i class="ti ti-clock-check" aria-hidden="true"></i> Últimos apontamentos · ${MESES[per.mes - 1]}</span></div>
           ${ultHTML}
         </div>
       </div>
     </div>`;
 }
+
+async function carregarDash() {
+  if (S.tela !== 'dashboard') return;
+  S.dash = null; renderMain();
+  try { S.dash = await req('GET', `/dashboard/?ano=${S.finAno}&mes=${S.finMes}`); renderMain(); }
+  catch (err) { toast('Erro ao carregar: ' + err.message, 'erro'); }
+}
+function irMesAtual() { const h = new Date(); S.finAno = h.getFullYear(); S.finMes = h.getMonth() + 1; carregarDash(); }
 
 // ── APONTAMENTOS ─────────────────────────────────────────────
 function renderApontamentos(main) {
@@ -1010,6 +1074,157 @@ function renderFolha(main) {
       </div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Mensalistas recebem só o fixo + adicionais (diárias lançadas para eles servem apenas para o custo das obras). Passe o mouse em "Parcelas" para ver o detalhe dos empréstimos.</p>
     </div>`;
+}
+
+// ── DESPESAS (alimentação e outros custos) ─────────────────────
+const CAT_DESP = {
+  alimentacao: { nome: 'Alimentação', badge: 'b-a', ico: 'ti-tools-kitchen-2' },
+  combustivel: { nome: 'Combustível / Frete', badge: '', ico: 'ti-gas-station' },
+  ferramentas: { nome: 'Ferramentas / EPI', badge: '', ico: 'ti-tool' },
+  hospedagem:  { nome: 'Hospedagem / Deslocamento', badge: '', ico: 'ti-bed' },
+  outros:      { nome: 'Outros', badge: '', ico: 'ti-dots' },
+};
+
+async function carregarDespesas() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'despesas' || !main) return;
+  main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
+  try { S.desp = await req('GET', `/despesas/?ano=${S.finAno}&mes=${S.finMes}`); renderDespesas(main); }
+  catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function valorPessoaPadrao() {
+  const a = (S.desp?.despesas || []).find(d => d.categoria === 'alimentacao' && d.automatica && d.pessoas);
+  if (a) return +(a.valor / a.pessoas).toFixed(2);
+  try { return +localStorage.getItem('az_valor_refeicao') || 20; } catch { return 20; }
+}
+
+function renderDespesas(main) {
+  const D = S.desp || { despesas: [], por_categoria: [], total: 0, alimentacao: {} };
+  const al = D.alimentacao || {};
+  const outros = D.por_categoria.filter(c => c.id !== 'alimentacao').reduce((a, c) => a + c.valor, 0);
+  const linhas = D.despesas.map(d => {
+    const c = CAT_DESP[d.categoria] || { nome: d.categoria, badge: '' };
+    return `<tr>
+      <td>${fmtData(d.data)}</td>
+      <td><span class="badge ${c.badge}">${c.nome}</span>${d.automatica ? ' <span style="font-size:10px;color:var(--text-muted)" title="Calculada pelos apontamentos">auto</span>' : ''}</td>
+      <td style="color:var(--text-muted)">${esc(d.descricao || '')}${d.obra_nome ? ' · ' + esc(d.obra_nome) : ''}</td>
+      <td style="text-align:right;font-weight:500;white-space:nowrap">R$ ${fmtBR(d.valor)}</td>
+      <td><div style="display:flex;gap:4px;justify-content:flex-end">
+        <button class="btn" onclick="abrirModalDesp(${d.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+        <button class="btn" onclick="excluirDesp(${d.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div></td></tr>`;
+  }).join('');
+  const resumoCat = D.por_categoria.filter(c => c.valor).map(c => `
+    <div class="fin-row" style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border, #eef0f3)">
+      <span class="fin-label">${(CAT_DESP[c.id] || {}).nome || c.nome}</span><span class="fin-val" style="font-weight:500">R$ ${fmtBR(c.valor)}</span></div>`).join('')
+    || '<p class="empty">Nenhuma despesa neste mês</p>';
+
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Despesas</div><div class="topbar-sub">Alimentação e outros custos · ${MESES[S.finMes - 1]} de ${S.finAno}</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="abrirModalCalcAlim()"><i class="ti ti-calculator" aria-hidden="true"></i> Calcular alimentação</button>
+        <button class="btn btn-p" onclick="abrirModalDesp()"><i class="ti ti-plus" aria-hidden="true"></i> Nova despesa</button>
+      </div>
+    </div>
+    <div class="content">
+      <div style="margin-bottom:14px">${seletorMes('carregarDespesas')}</div>
+      <div class="metrics">
+        <div class="metric"><div class="metric-ico amber"><i class="ti ti-tools-kitchen-2" aria-hidden="true"></i></div><div class="metric-label">Alimentação</div><div class="metric-val">R$ ${fmtBR(al.total)}</div><div class="metric-sub">${al.refeicoes || 0} refeições em ${al.dias || 0} dia(s)</div></div>
+        <div class="metric"><div class="metric-ico blue"><i class="ti ti-users" aria-hidden="true"></i></div><div class="metric-label">Média de pessoas/dia</div><div class="metric-val">${al.dias ? (al.refeicoes / al.dias).toFixed(1) : '0'}</div><div class="metric-sub">nos dias com refeição</div></div>
+        <div class="metric"><div class="metric-ico red"><i class="ti ti-receipt" aria-hidden="true"></i></div><div class="metric-label">Outros custos</div><div class="metric-val">R$ ${fmtBR(outros)}</div><div class="metric-sub">combustível, ferramentas, hospedagem...</div></div>
+        <div class="metric"><div class="metric-ico green"><i class="ti ti-sum" aria-hidden="true"></i></div><div class="metric-label">Total de despesas</div><div class="metric-val">R$ ${fmtBR(D.total)}</div><div class="metric-sub">sem contar a mão de obra</div></div>
+      </div>
+      <div class="row2">
+        <div class="table-card" style="overflow-x:auto">
+          <table>
+            <thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th style="text-align:right">Valor</th><th></th></tr></thead>
+            <tbody>${linhas || '<tr><td colspan="5" class="empty">Nenhuma despesa neste mês. Use "Calcular alimentação" para gerar pelos apontamentos.</td></tr>'}</tbody>
+          </table>
+        </div>
+        <div class="card" style="align-self:start">
+          <div class="card-header"><span class="card-title"><i class="ti ti-chart-pie" aria-hidden="true"></i> Por categoria</span></div>
+          ${resumoCat}
+        </div>
+      </div>
+    </div>`;
+}
+
+function abrirModalCalcAlim() {
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">Calcular alimentação · ${MESES[S.finMes - 1]}/${S.finAno}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">Para cada dia com apontamento, conta quem trabalhou e multiplica pelo valor por pessoa. Dias que você lançou ou editou à mão não são alterados.</p>
+        <div class="field"><label>Valor por pessoa/dia (R$)</label><input id="ca-valor" type="number" step="0.01" value="${valorPessoaPadrao()}" /></div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0 4px"><input id="ca-mens" type="checkbox" checked style="width:auto" /> Incluir mensalistas em todo dia com equipe trabalhando</label>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="calcularAlimentacao()">Calcular</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function calcularAlimentacao() {
+  const valor = parseFloat(document.getElementById('ca-valor').value) || 0;
+  if (valor <= 0) { toast('Informe o valor por pessoa', 'erro'); return; }
+  try {
+    const r = await req('POST', '/despesas/alimentacao/calcular', { ano: S.finAno, mes: S.finMes, valor_pessoa: valor, incluir_mensalistas: document.getElementById('ca-mens').checked });
+    try { localStorage.setItem('az_valor_refeicao', valor); } catch {}
+    fecharModal(); toast(`Alimentação calculada: ${r.dias} dia(s), R$ ${fmtBR(r.total)}`); carregarDespesas();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+function abrirModalDesp(id) {
+  const d = id ? (S.desp?.despesas || []).find(x => x.id === id) : null;
+  const hoje = new Date();
+  const dataPadrao = (S.finAno === hoje.getFullYear() && S.finMes === hoje.getMonth() + 1) ? hoje.toISOString().slice(0, 10) : `${S.finAno}-${String(S.finMes).padStart(2, '0')}-01`;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${d ? 'Editar despesa' : 'Nova despesa'}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="form-grid2">
+          <div class="field"><label>Categoria *</label><select id="md-cat">${Object.entries(CAT_DESP).map(([k, c]) => `<option value="${k}" ${d?.categoria === k ? 'selected' : ''}>${c.nome}</option>`).join('')}</select></div>
+          <div class="field"><label>Valor (R$) *</label><input id="md-valor" type="number" step="0.01" value="${d?.valor || ''}" placeholder="0,00" /></div>
+        </div>
+        <div class="form-grid2">
+          <div class="field"><label>Data *</label><input id="md-data" type="date" value="${d?.data || dataPadrao}" /></div>
+          <div class="field"><label>Pessoas <span style="font-weight:400;color:var(--text-muted)">(alimentação)</span></label><input id="md-pessoas" type="number" value="${d?.pessoas || ''}" /></div>
+        </div>
+        <div class="field"><label>Obra <span style="font-weight:400;color:var(--text-muted)">(opcional)</span></label><select id="md-obra"><option value="">—</option>${S.obras.map(o => `<option value="${o.id}" ${d?.obra_id === o.id ? 'selected' : ''}>${esc(o.nome)}</option>`).join('')}</select></div>
+        <div class="field"><label>Descrição</label><input id="md-desc" value="${esc(d?.descricao || '')}" placeholder="Ex: Rancho Atacadão, diesel caminhonete..." /></div>
+        ${d?.automatica ? '<p style="font-size:12px;color:var(--text-muted);margin:0">Ao salvar, este dia passa a ser manual e o cálculo automático não mexe mais nele.</p>' : ''}
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarDesp(${d?.id || 'null'})">${d ? 'Salvar' : 'Lançar'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function salvarDesp(id) {
+  const data = {
+    categoria: document.getElementById('md-cat').value,
+    valor: parseFloat(document.getElementById('md-valor').value) || 0,
+    data: document.getElementById('md-data').value,
+    pessoas: parseInt(document.getElementById('md-pessoas').value) || null,
+    obra_id: parseInt(document.getElementById('md-obra').value) || null,
+    descricao: document.getElementById('md-desc').value.trim() || null,
+  };
+  if (!data.valor || !data.data) { toast('Preencha valor e data', 'erro'); return; }
+  try {
+    await req(id ? 'PUT' : 'POST', id ? `/despesas/${id}` : '/despesas/', data);
+    const dt = new Date(data.data + 'T12:00:00'); S.finAno = dt.getFullYear(); S.finMes = dt.getMonth() + 1;
+    fecharModal(); toast(id ? 'Despesa atualizada!' : 'Despesa lançada!'); carregarDespesas();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirDesp(id) {
+  if (!confirm('Excluir esta despesa?')) return;
+  try { await req('DELETE', `/despesas/${id}`); toast('Excluída!'); carregarDespesas(); }
+  catch (err) { toast(err.message, 'erro'); }
 }
 
 function fecharModal() { document.getElementById('modal-root').innerHTML = ''; }
