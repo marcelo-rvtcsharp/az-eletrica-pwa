@@ -23,7 +23,31 @@ async function req(method, path, body) {
 function fmtBR(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtData(s) { if (!s) return '—'; return new Date(s + 'T12:00:00').toLocaleDateString('pt-BR'); }
 function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// ── Toque tátil (vibração) ────────────────────────────────────
+// Android: navigator.vibrate. iPhone (Safari 18+): o "switch" nativo gera um toque leve.
+const VIB = { toque: 8, ok: [14, 50, 22], erro: [45, 60, 45], aviso: [22, 40, 22] };
+let _hapIOS = null;
+function vibrar(tipo = 'toque') {
+  try {
+    if (localStorage.getItem('az_vibrar') === '0') return;
+    if (navigator.vibrate) { navigator.vibrate(VIB[tipo] || VIB.toque); return; }
+    if (!/iP(hone|ad|od)/.test(navigator.userAgent)) return;
+    if (!_hapIOS) {
+      _hapIOS = document.createElement('label'); _hapIOS.setAttribute('aria-hidden', 'true');
+      _hapIOS.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9px;top:-9px';
+      _hapIOS.innerHTML = '<input type="checkbox" switch tabindex="-1">'; document.body.appendChild(_hapIOS);
+    }
+    const n = tipo === 'toque' ? 1 : 2;
+    for (let i = 0; i < n; i++) setTimeout(() => _hapIOS.click(), i * 90);
+  } catch { /* sem vibração neste aparelho */ }
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('button, .nav-item, .bn-item, .mais-item, a.pt-btn, .pt-op, .pt-dia');
+  if (b && !b.disabled) vibrar('toque');
+}, { capture: true, passive: true });
+
 function toast(msg, tipo) {
+  vibrar(tipo === 'erro' ? 'erro' : tipo === 'aviso' ? 'aviso' : 'ok');
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.className = 'toast show' + (tipo === 'erro' ? ' erro' : '');
@@ -35,6 +59,8 @@ const S = { tela: 'dashboard', orc: null, obras: [], eletricistas: [], orcamento
 
 function mostrarLogin() {
   document.getElementById('app').style.display = 'none';
+  const pt = document.getElementById('portal'); if (pt) { pt.style.display = 'none'; pt.innerHTML = ''; }
+  pararSino();
   document.getElementById('login-screen').style.display = 'flex';
 }
 
@@ -53,7 +79,7 @@ async function handleLogin(e) {
       body: 'username=' + encodeURIComponent(email) + '&password=' + encodeURIComponent(senha),
     });
     const data = await res.json();
-    if (!res.ok || !data.access_token) throw new Error(data.detail || 'Email ou senha incorretos');
+    if (!res.ok || !data.access_token) throw new Error(data.detail || 'E-mail ou senha incorretos');
     Token.set(data.access_token);
     localStorage.setItem('az_user', JSON.stringify(data.usuario));
     iniciarApp();
@@ -65,13 +91,17 @@ async function handleLogin(e) {
 }
 
 function iniciarApp() {
+  if (usuarioLogado().perfil === 'diarista') { document.getElementById('login-screen').style.display = 'none'; iniciarPortal(); return; }
   mostrarUsuarioLogado();
   atualizarUsuarioLogado();   // pega nome/cargo atualizados do servidor
   montarNavMobile();
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
-  navegar('dashboard');
+  const telaUrl = new URLSearchParams(location.search).get('tela');
+  if (telaUrl) history.replaceState(null, '', '/');
+  navegar(['apontamentos', 'obras', 'folha', 'ferramentas', 'equipe'].includes(telaUrl) ? telaUrl : 'dashboard');
   carregarDados();
+  iniciarSino();
 }
 
 async function carregarDados() {
@@ -443,7 +473,19 @@ async function salvarApontamento() {
 
 // ── OBRAS ────────────────────────────────────────────────────
 function renderObrasPage(main) {
-  const cards = S.obras.map(o => {
+  const pedidas = S.obras.filter(o => o.status === 'Solicitada');
+  const avisoPedidas = pedidas.length ? `<div class="aviso-pedidas"><i class="ti ti-map-pin-plus" aria-hidden="true"></i><div><b>${pedidas.length} obra(s) pedida(s) pela equipe</b><br><span>Aprove preenchendo cliente e valor, ou junte com uma obra que já existe (se foi só nome diferente).</span></div></div>` : '';
+  const cards = [...pedidas, ...S.obras.filter(o => o.status !== 'Solicitada')].map(o => {
+    if (o.status === 'Solicitada') return `<div class="obra-card obra-pedida">
+      <div class="obra-card-top"><div class="obra-card-header"><div class="obra-card-nome">${esc(o.nome)}</div><span class="badge b-a">Pedida pela equipe</span></div>
+        <div class="obra-card-loc"><i class="ti ti-map-pin" aria-hidden="true"></i> ${esc(o.cidade || 'Cidade não informada')}</div></div>
+      <div class="obra-fin"><div style="font-size:12px;color:var(--text-muted);line-height:1.45">${esc(o.observacoes || '')}</div>
+        <div class="fin-row" style="margin-top:8px"><span class="fin-label">Diárias já lançadas</span><span class="fin-val">R$ ${fmtBR(o.total_gasto)}</span></div></div>
+      <div class="obra-card-footer" style="gap:6px;flex-wrap:wrap">
+        <button class="btn" onclick="abrirJuntarObra(${o.id})"><i class="ti ti-arrow-merge" aria-hidden="true"></i> Juntar com…</button>
+        <div style="display:flex;gap:6px">
+          <button class="btn" onclick="excluirObra(${o.id}, '${esc(o.nome)}')" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+          <button class="btn btn-p" onclick="editarObra(${o.id})"><i class="ti ti-check" aria-hidden="true"></i> Aprovar</button></div></div></div>`;
     const cor = o.situacao === 'negativo' ? '#ef4444' : o.situacao === 'atencao' ? '#f59e0b' : '#10b981';
     const corTxt = o.situacao === 'negativo' ? '#b91c1c' : o.situacao === 'atencao' ? '#a16207' : '#15803d';
     const bc = o.situacao === 'negativo' ? 'b-r' : o.situacao === 'atencao' ? 'b-a' : 'b-g';
@@ -481,7 +523,29 @@ function renderObrasPage(main) {
         <button class="btn btn-p" onclick="abrirModalObra()"><i class="ti ti-plus" aria-hidden="true"></i> Nova obra</button>
       </div>
     </div>
-    <div class="content"><div class="obras-grid">${cards}</div></div>`;
+    <div class="content">${avisoPedidas}<div class="obras-grid">${cards}</div></div>`;
+}
+
+function abrirJuntarObra(id) {
+  const o = S.obras.find(x => x.id === id);
+  const outras = S.obras.filter(x => x.id !== id && x.status !== 'Solicitada').sort((a, b) => a.nome.localeCompare(b.nome));
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">Juntar "${esc(o.nome)}"</span><button class="btn" onclick="fecharModal()" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 10px">As diárias (R$ ${fmtBR(o.total_gasto)}), despesas e ferramentas desta obra passam para a obra escolhida, e "${esc(o.nome)}" é apagada.</p>
+        <div class="field"><label>É a mesma obra que</label><select id="jo-dest">${outras.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join('')}</select></div>
+        <div class="modal-footer"><button class="btn" onclick="fecharModal()">Cancelar</button><button class="btn btn-p" onclick="juntarObra(${id})"><i class="ti ti-arrow-merge" aria-hidden="true"></i> Juntar</button></div>
+      </div>
+    </div>`;
+}
+async function juntarObra(id) {
+  const dest = +document.getElementById('jo-dest').value; if (!dest) return;
+  try {
+    const d = await req('POST', `/obras/${id}/juntar`, { destino_id: dest });
+    S.obras = S.obras.filter(o => o.id !== id).map(o => o.id === d.id ? d : o);
+    fecharModal(); toast('Obras juntadas!'); renderMain();
+  } catch (err) { toast(err.message, 'erro'); }
 }
 
 function abrirModalObra(id) {
@@ -491,9 +555,10 @@ function abrirModalObra(id) {
     <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
       <div class="modal">
         <div class="modal-header"><span class="modal-title">${titulo}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        ${o?.status === 'Solicitada' ? '<p class="aviso-inline"><i class="ti ti-info-circle" aria-hidden="true"></i> Obra pedida pela equipe. Confira o nome, preencha cliente e valor e salve para aprovar.</p>' : ''}
         <div class="field"><label>Nome da obra *</label><input id="m-nome" value="${esc(o?.nome || '')}" placeholder="Ex: Residência João Silva" /></div>
         <div class="form-grid2">
-          <div class="field"><label>Cliente *</label><input id="m-cliente" value="${esc(o?.cliente || '')}" placeholder="Nome do cliente" /></div>
+          <div class="field"><label>Cliente *</label><input id="m-cliente" value="${esc(o?.cliente === 'A definir' ? '' : (o?.cliente || ''))}" placeholder="Nome do cliente" /></div>
           <div class="field"><label>Contato</label><input id="m-contato" value="${esc(o?.contato || '')}" placeholder="(88) 9 0000-0000" /></div>
         </div>
         <div class="form-grid2">
@@ -811,45 +876,52 @@ async function pdfOrc(id) {
     const cli = (o.cliente_nome || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w]+/g, '_').replace(/^_|_$/g, '').slice(0, 40);
     S.orcPdf = { arquivo: new File([blob], `Orcamento_${o.numero || id}${cli ? '_' + cli : ''}.pdf`, { type: 'application/pdf' }), orc: o };
     const total = (o.itens || []).reduce((a, it) => a + (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0), 0);
-    const podeCompartilhar = !!(navigator.canShare && navigator.canShare({ files: [S.orcPdf.arquivo] }));
+    modalPdfPronto(S.orcPdf.arquivo, `${o.cliente_nome || 'Sem cliente'} · R$ ${fmtBR(total)}`, () => marcarOrcEnviado(o),
+      `Olá${o.cliente_nome ? ', ' + o.cliente_nome : ''}! Segue o orçamento ${o.numero || ''}${o.obra_descricao ? ' (' + o.obra_descricao + ')' : ''} da AZ Elétrica. Qualquer dúvida, estamos à disposição.`);
+  } catch (err) { fecharModal(); toast(err.message, 'erro'); }
+}
+
+// Modal "PDF pronto": enviar pelo WhatsApp (folha de compartilhar do celular), ver ou baixar
+function modalPdfPronto(arquivo, info, aposEnviar, texto) {
+  S.pdfPronto = { arquivo, aposEnviar, texto };
+  const podeCompartilhar = !!(navigator.canShare && navigator.canShare({ files: [arquivo] }));
+  {
     document.getElementById('modal-root').innerHTML = `
       <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
         <div class="modal" style="max-width:420px">
           <div class="modal-header"><span class="modal-title">PDF pronto</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
-          <div class="pdf-pronto"><i class="ti ti-file-type-pdf" aria-hidden="true"></i><div style="min-width:0"><div class="pp-nome">${esc(S.orcPdf.arquivo.name)}</div>
-            <div class="pp-info">${esc(o.cliente_nome || 'Sem cliente')} · R$ ${fmtBR(total)}</div></div></div>
-          <button class="btn btn-whats btn-full" onclick="enviarOrcWhats()"><i class="ti ti-brand-whatsapp" aria-hidden="true"></i> Enviar pelo WhatsApp</button>
+          <div class="pdf-pronto"><i class="ti ti-file-type-pdf" aria-hidden="true"></i><div style="min-width:0"><div class="pp-nome">${esc(arquivo.name)}</div>
+            <div class="pp-info">${esc(info || '')}</div></div></div>
+          <button class="btn btn-whats btn-full" onclick="enviarPdfWhats()"><i class="ti ti-brand-whatsapp" aria-hidden="true"></i> Enviar pelo WhatsApp</button>
           <p style="font-size:11.5px;color:var(--text-muted);margin:6px 2px 12px">${podeCompartilhar ? 'Escolha o WhatsApp na lista e depois a conversa. O PDF vai anexado.' : 'No computador: o PDF é baixado e o WhatsApp abre para você escolher a conversa e anexar o arquivo (clipe 📎).'}</p>
           <div style="display:flex;gap:8px">
-            <button class="btn" style="flex:1;justify-content:center" onclick="abrirOrcPdf()"><i class="ti ti-eye" aria-hidden="true"></i> Ver PDF</button>
-            <button class="btn" style="flex:1;justify-content:center" onclick="baixarArquivo(S.orcPdf.arquivo)"><i class="ti ti-download" aria-hidden="true"></i> Baixar</button>
+            <button class="btn" style="flex:1;justify-content:center" onclick="abrirPdfPronto()"><i class="ti ti-eye" aria-hidden="true"></i> Ver PDF</button>
+            <button class="btn" style="flex:1;justify-content:center" onclick="baixarArquivo(S.pdfPronto.arquivo)"><i class="ti ti-download" aria-hidden="true"></i> Baixar</button>
           </div>
         </div>
       </div>`;
-  } catch (err) { fecharModal(); toast(err.message, 'erro'); }
+  }
 }
 
-function abrirOrcPdf() {
-  if (!S.orcPdf) return;
-  const u = URL.createObjectURL(S.orcPdf.arquivo);
+function abrirPdfPronto() {
+  if (!S.pdfPronto) return;
+  const u = URL.createObjectURL(S.pdfPronto.arquivo);
   if (!window.open(u, '_blank')) window.location.href = u;
 }
 
-function enviarOrcWhats() {
-  const p = S.orcPdf; if (!p) return;
-  const o = p.orc || {};
-  const texto = `Olá${o.cliente_nome ? ', ' + o.cliente_nome : ''}! Segue o orçamento ${o.numero || ''}${o.obra_descricao ? ' (' + o.obra_descricao + ')' : ''} da AZ Elétrica. Qualquer dúvida, estamos à disposição.`;
+function enviarPdfWhats() {
+  const p = S.pdfPronto; if (!p) return;
   if (navigator.canShare && navigator.canShare({ files: [p.arquivo] })) {
     // chamado direto no toque (sem await antes) para o celular abrir a lista de apps
     navigator.share({ files: [p.arquivo], title: p.arquivo.name.replace(/\.pdf$/, '') })
-      .then(() => { fecharModal(); marcarOrcEnviado(o); })
+      .then(() => { fecharModal(); p.aposEnviar && p.aposEnviar(); })
       .catch(err => { if (err?.name !== 'AbortError') toast('Não foi possível compartilhar: ' + err.message, 'erro'); });
     return;
   }
   baixarArquivo(p.arquivo);
-  window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
+  window.open(`https://wa.me/?text=${encodeURIComponent(p.texto || '')}`, '_blank');
   toast('PDF baixado. No WhatsApp, escolha a conversa e anexe o arquivo.');
-  marcarOrcEnviado(o);
+  p.aposEnviar && p.aposEnviar();
 }
 
 async function marcarOrcEnviado(o) {
@@ -1147,7 +1219,7 @@ function renderFolha(main) {
       <div><div class="topbar-title">Folha mensal</div><div class="topbar-sub">${MESES[S.finMes - 1]} de ${S.finAno} · ${f.linhas.length} funcionário(s)</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" onclick="navegar('financeiro')"><i class="ti ti-cash" aria-hidden="true"></i> Lançar adiantamento</button>
-        <button class="btn btn-p" onclick="window.print()"><i class="ti ti-printer" aria-hidden="true"></i> Imprimir</button>
+        <button class="btn btn-whats" onclick="pdfFolha()"><i class="ti ti-brand-whatsapp" aria-hidden="true"></i> PDF / Enviar</button>
       </div>
     </div>
     <div class="content">
@@ -1170,6 +1242,18 @@ function renderFolha(main) {
       </div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:10px">Mensalistas recebem só o fixo + adicionais (diárias lançadas para eles servem apenas para o custo das obras). Passe o mouse em "Parcelas" para ver o detalhe dos empréstimos.</p>
     </div>`;
+}
+
+async function pdfFolha() {
+  const ano = S.finAno, mes = S.finMes;
+  document.getElementById('modal-root').innerHTML = `<div class="modal-overlay"><div class="modal" style="max-width:380px;text-align:center"><div class="spinner" style="margin:10px auto"></div><p style="font-size:13px;color:var(--text-muted)">Gerando o PDF da folha...</p></div></div>`;
+  try {
+    const { blob } = await reqArquivo(`/financeiro/folha/pdf?ano=${ano}&mes=${mes}`);
+    const arq = new File([blob], `Folha_AZ_${MESES[mes - 1]}_${ano}.pdf`, { type: 'application/pdf' });
+    const t = (S.folha && S.folha.ano === ano && S.folha.mes === mes) ? S.folha.totais || {} : {};
+    modalPdfPronto(arq, `${MESES[mes - 1]} de ${ano}${t.a_receber != null ? ' · a pagar R$ ' + fmtBR(t.a_receber) : ''}`, null,
+      `Folha de pagamento AZ Elétrica — ${MESES[mes - 1]}/${ano}.`);
+  } catch (err) { fecharModal(); toast(err.message, 'erro'); }
 }
 
 // ── DESPESAS (alimentação e outros custos) ─────────────────────
@@ -1869,20 +1953,21 @@ function renderUsuarios(main) {
         <div class="av" style="background:#fef3c7;color:#a16207">${esc(u.nome.replace(/^ENG\.?\s*/i, '').split(' ').map(p => p[0]).slice(0, 2).join('').toUpperCase())}</div>
         <div><div style="font-size:13px;font-weight:600;color:var(--text-primary)">${esc(u.nome)}${u.id === eu ? ' <span class="badge b-g" style="margin-left:4px">você</span>' : ''}</div>
           <div style="font-size:11px;color:var(--text-muted)">${esc(u.cargo || '—')}</div></div></div></td>
-      <td style="color:var(--text-muted)">${esc(u.email)}</td>
-      <td><span class="badge ${u.ativo ? 'b-g' : ''}">${u.ativo ? 'Ativo' : 'Desativado'}</span></td>
+      <td data-label="Login" style="color:var(--text-muted)">${esc(u.email)}${u.perfil === 'diarista' && u.senha_padrao ? ' <span class="badge" title="Ainda usa a senha 123456">senha 123456</span>' : ''}</td>
+      <td data-label="Acesso"><span class="badge ${u.perfil === 'diarista' ? 'b-a' : 'b-b'}">${u.perfil === 'diarista' ? 'Diarista' : 'Escritório'}</span> <span class="badge ${u.ativo ? 'b-g' : ''}">${u.ativo ? 'Ativo' : 'Desativado'}</span></td>
       <td><div style="display:flex;gap:4px;justify-content:flex-end">
+        ${u.perfil === 'diarista' ? `<button class="btn" onclick="resetarSenhaDiarista(${u.id})" title="Voltar a senha para 123456"><i class="ti ti-key" aria-hidden="true"></i> Resetar senha</button>` : ''}
         <button class="btn" onclick="abrirModalUsuario(${u.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
       </div></td></tr>`).join('');
   main.innerHTML = `
     <div class="topbar">
-      <div><div class="topbar-title">Usuários</div><div class="topbar-sub">Quem pode entrar no app · todos têm acesso completo</div></div>
-      <div style="display:flex;gap:8px"><button class="btn btn-p" onclick="abrirModalUsuario()"><i class="ti ti-user-plus" aria-hidden="true"></i> Novo usuário</button></div>
+      <div><div class="topbar-title">Usuários</div><div class="topbar-sub">Escritório: acesso completo · Diaristas: só apontam a própria diária e as ferramentas</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="gerarAcessosDiaristas()"><i class="ti ti-users-plus" aria-hidden="true"></i> Gerar acessos dos diaristas</button><button class="btn btn-p" onclick="abrirModalUsuario()"><i class="ti ti-user-plus" aria-hidden="true"></i> Novo usuário</button></div>
     </div>
     <div class="content">
       <div class="table-card">
         <table class="tbl-cards">
-          <thead><tr><th>Nome</th><th>E-mail (login)</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Nome</th><th>E-mail (login)</th><th>Acesso</th><th></th></tr></thead>
           <tbody>${linhas || '<tr><td colspan="4" class="empty">Nenhum usuário</td></tr>'}</tbody>
         </table>
       </div>
@@ -1910,6 +1995,34 @@ function abrirModalUsuario(id) {
       </div>
     </div>`;
   setTimeout(() => document.getElementById('mu-nome')?.focus(), 50);
+}
+
+async function gerarAcessosDiaristas() {
+  if (!confirm('Criar o acesso de cada diarista ativo que ainda não tem?\n\nLogin: primeironome@gmail.com\nSenha inicial: 123456')) return;
+  try {
+    const r = await req('POST', '/auth/diaristas/gerar');
+    await carregarUsuarios();
+    const lista = (r.criados || []).map(c => `<tr><td>${esc(c.nome)}</td><td><b>${esc(c.email)}</b></td></tr>`).join('');
+    document.getElementById('modal-root').innerHTML = `
+      <div class="modal-overlay" onclick="if(event.target===this)fecharModal()"><div class="modal" style="max-width:520px">
+        <div class="modal-header"><span class="modal-title">${(r.criados || []).length ? 'Acessos criados' : 'Nada a criar'}</span><button class="btn" onclick="fecharModal()" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        ${lista ? `<p style="font-size:13px;color:var(--text-muted);margin:0 0 8px">Senha inicial de todos: <b style="color:var(--text-primary)">${esc(r.senha)}</b>. Cada um pode trocar no próprio celular.</p>
+        <div style="max-height:50vh;overflow:auto"><table><thead><tr><th>Funcionário</th><th>Login</th></tr></thead><tbody>${lista}</tbody></table></div>
+        <button class="btn btn-whats btn-full" style="margin-top:12px" onclick="copiarAcessos()"><i class="ti ti-copy" aria-hidden="true"></i> Copiar lista para o WhatsApp</button>` : '<p style="font-size:13px">Todos os diaristas ativos já têm acesso.</p>'}
+      </div></div>`;
+    S.acessosCriados = r;
+  } catch (err) { toast(err.message, 'erro'); }
+}
+function copiarAcessos() {
+  const r = S.acessosCriados; if (!r) return;
+  const txt = `*AZ Elétrica — acesso da equipe*\nApp: ${location.origin}\nSenha inicial: ${r.senha} (troque no primeiro acesso)\n\n` + r.criados.map(c => `${c.nome}: ${c.email}`).join('\n');
+  navigator.clipboard.writeText(txt).then(() => toast('Lista copiada! Cole no WhatsApp.')).catch(() => toast('Não foi possível copiar', 'erro'));
+}
+async function resetarSenhaDiarista(id) {
+  const u = S.usuarios.find(x => x.id === id);
+  if (!confirm(`Voltar a senha de ${u.nome} para 123456?`)) return;
+  try { await req('PUT', `/auth/usuarios/${id}`, { nome: u.nome, cargo: u.cargo, email: u.email, ativo: u.ativo, nova_senha: '123456' }); toast('Senha voltou para 123456'); carregarUsuarios(); }
+  catch (err) { toast(err.message, 'erro'); }
 }
 
 async function salvarUsuario(id) {
@@ -2108,6 +2221,74 @@ async function enviarResumo() {
 }
 
 function fecharModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+// ── NOTIFICAÇÕES (sininho + push no celular) ─────────────────
+let _sinoTimer = null;
+function iniciarSino() { pararSino(); atualizarSino(); _sinoTimer = setInterval(atualizarSino, 60000); }
+function pararSino() { if (_sinoTimer) clearInterval(_sinoTimer); _sinoTimer = null; }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && _sinoTimer) atualizarSino(); });
+async function atualizarSino() {
+  try {
+    const r = await req('GET', '/notificacoes?limite=30'); if (!r) return;
+    const antes = S.notifNaoLidas || 0;
+    S.notif = r; S.notifNaoLidas = r.nao_lidas;
+    document.querySelectorAll('.sino-badge').forEach(b => { b.textContent = r.nao_lidas > 9 ? '9+' : r.nao_lidas; b.style.display = r.nao_lidas ? 'flex' : 'none'; });
+    if (r.nao_lidas > antes && antes !== undefined && S._sinoIniciado) vibrar('aviso');
+    S._sinoIniciado = true;
+  } catch { /* offline */ }
+}
+function haTempo(iso) {
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  if (m < 1) return 'agora'; if (m < 60) return `há ${m} min`; const h = Math.round(m / 60);
+  if (h < 24) return `há ${h} h`; const d = Math.round(h / 24); return d === 1 ? 'ontem' : `há ${d} dias`;
+}
+async function abrirSino() {
+  await atualizarSino();
+  const r = S.notif || { itens: [] };
+  const ico = { diaria: 'ti-clock-check', obra: 'ti-map-pin-plus' };
+  const pushOk = 'PushManager' in window && 'serviceWorker' in navigator && 'Notification' in window;
+  const ativo = pushOk && Notification.permission === 'granted' && localStorage.getItem('az_push') === '1';
+  const ios = /iP(hone|ad|od)/.test(navigator.userAgent), standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal" style="max-width:460px">
+        <div class="modal-header"><span class="modal-title"><i class="ti ti-bell" aria-hidden="true"></i> Notificações</span><button class="btn" onclick="fecharModal()" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="push-box ${ativo ? 'ok' : ''}">
+          ${ativo ? `<i class="ti ti-device-mobile-check" aria-hidden="true"></i><div style="flex:1"><b>Avisos ativos neste celular</b><br><span>Você recebe quando um diarista apontar ou pedir obra.</span></div><button class="btn" onclick="testarPush()">Testar</button>`
+      : !pushOk || (ios && !standalone) ? `<i class="ti ti-info-circle" aria-hidden="true"></i><div><b>Para receber avisos no celular</b><br><span>${ios ? 'No iPhone: abra no Safari › Compartilhar › "Adicionar à Tela de Início", entre pelo ícone e ative aqui.' : 'Este navegador não aceita notificações. Use o Chrome.'}</span></div>`
+      : `<i class="ti ti-bell-ringing" aria-hidden="true"></i><div style="flex:1"><b>Receber avisos neste celular</b><br><span>Quando um diarista apontar a diária ou pedir obra nova.</span></div><button class="btn btn-p" onclick="ativarPush()">Ativar</button>`}
+        </div>
+        <div class="notif-lista">${(r.itens || []).map(n => `
+          <button class="notif-item ${n.lida ? '' : 'nova'}" onclick="fecharModal();${n.link ? `navegar('${esc(n.link)}')` : ''}">
+            <span class="ni-ico"><i class="ti ${ico[n.tipo] || 'ti-bell'}" aria-hidden="true"></i></span>
+            <span style="flex:1;min-width:0;text-align:left"><span class="ni-tit">${esc(n.titulo)}</span><span class="ni-txt">${esc(n.texto || '')}</span><span class="ni-quando">${n.criado_em ? haTempo(n.criado_em) : ''}</span></span>
+          </button>`).join('') || '<p class="empty">Nenhuma notificação ainda</p>'}</div>
+      </div>
+    </div>`;
+  if (r.nao_lidas) { req('POST', '/notificacoes/lidas').then(() => { S.notifNaoLidas = 0; document.querySelectorAll('.sino-badge').forEach(b => b.style.display = 'none'); }).catch(() => {}); }
+}
+function b64ParaBytes(b64) {
+  const p = '='.repeat((4 - b64.length % 4) % 4); const raw = atob((b64 + p).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+async function ativarPush() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Permissão negada. Libere as notificações nas configurações do navegador.', 'erro'); return; }
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    const { chave } = await req('GET', '/push/chave');
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ParaBytes(chave) });
+    await req('POST', '/push/assinar', sub.toJSON());
+    localStorage.setItem('az_push', '1');
+    toast('Avisos ativados neste celular!'); abrirSino();
+    req('POST', '/push/teste').catch(() => {});
+  } catch (err) { toast('Não foi possível ativar: ' + err.message, 'erro'); }
+}
+async function testarPush() {
+  try { await req('POST', '/push/teste'); toast('Enviado! Deve chegar em alguns segundos.'); } catch (err) { toast(err.message, 'erro'); }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('login-form').onsubmit = handleLogin;
