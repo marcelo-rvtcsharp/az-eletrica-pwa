@@ -1952,11 +1952,11 @@ function renderUsuarios(main) {
       <td><div class="elet-cell">
         <div class="av" style="background:#fef3c7;color:#a16207">${esc(u.nome.replace(/^ENG\.?\s*/i, '').split(' ').map(p => p[0]).slice(0, 2).join('').toUpperCase())}</div>
         <div><div style="font-size:13px;font-weight:600;color:var(--text-primary)">${esc(u.nome)}${u.id === eu ? ' <span class="badge b-g" style="margin-left:4px">você</span>' : ''}</div>
-          <div style="font-size:11px;color:var(--text-muted)">${esc(u.cargo || '—')}</div></div></div></td>
+          <div style="font-size:11px;color:var(--text-muted)">${esc(u.cargo || '—')}${(u.equipe_nomes || []).length ? ' · aponta também: ' + esc(u.equipe_nomes.join(', ')) : ''}</div></div></div></td>
       <td data-label="Login" style="color:var(--text-muted)">${esc(u.email)}${u.perfil === 'diarista' && u.senha_padrao ? ' <span class="badge" title="Ainda usa a senha 123456">senha 123456</span>' : ''}</td>
       <td data-label="Acesso"><span class="badge ${u.perfil === 'diarista' ? 'b-a' : 'b-b'}">${u.perfil === 'diarista' ? 'Diarista' : 'Escritório'}</span> <span class="badge ${u.ativo ? 'b-g' : ''}">${u.ativo ? 'Ativo' : 'Desativado'}</span></td>
       <td><div style="display:flex;gap:4px;justify-content:flex-end">
-        ${u.perfil === 'diarista' ? `<button class="btn" onclick="resetarSenhaDiarista(${u.id})" title="Voltar a senha para 123456"><i class="ti ti-key" aria-hidden="true"></i> Resetar senha</button>` : ''}
+        ${u.perfil === 'diarista' ? `<button class="btn" onclick="abrirEquipeEncarregado(${u.id})" title="Quem ele pode apontar"><i class="ti ti-users-group" aria-hidden="true"></i> Equipe${(u.equipe || []).length ? ' (' + u.equipe.length + ')' : ''}</button><button class="btn" onclick="resetarSenhaDiarista(${u.id})" title="Voltar a senha para 123456"><i class="ti ti-key" aria-hidden="true"></i> Resetar senha</button>` : ''}
         <button class="btn" onclick="abrirModalUsuario(${u.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
       </div></td></tr>`).join('');
   main.innerHTML = `
@@ -2017,6 +2017,25 @@ function copiarAcessos() {
   const r = S.acessosCriados; if (!r) return;
   const txt = `*AZ Elétrica — acesso da equipe*\nApp: ${location.origin}\nSenha inicial: ${r.senha} (troque no primeiro acesso)\n\n` + r.criados.map(c => `${c.nome}: ${c.email}`).join('\n');
   navigator.clipboard.writeText(txt).then(() => toast('Lista copiada! Cole no WhatsApp.')).catch(() => toast('Não foi possível copiar', 'erro'));
+}
+function abrirEquipeEncarregado(id) {
+  const u = S.usuarios.find(x => x.id === id);
+  const elets = (S.eletricistas || []).filter(e => e.status === 'Ativo' && e.id !== u.eletricista_id).sort((a, b) => a.nome.localeCompare(b.nome));
+  const sel = new Set(u.equipe || []);
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">Equipe de ${esc(u.nome)}</span><button class="btn" onclick="fecharModal()" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 10px">Marque quem ${esc(u.nome)} pode apontar junto com a diária dele. No app, ele escolhe a cada dia quem foi trabalhar.</p>
+        <div class="eq-lista">${elets.map(e => `<label class="eq-op"><input type="checkbox" value="${e.id}" ${sel.has(e.id) ? 'checked' : ''} /> <span><b>${esc(e.nome)}</b><small>${esc(e.funcao || '')}${e.tipo_contrato === 'Mensalista' ? ' · mensalista' : ''}</small></span></label>`).join('')}</div>
+        <div class="modal-footer"><button class="btn" onclick="fecharModal()">Cancelar</button><button class="btn btn-p" onclick="salvarEquipeEncarregado(${id})"><i class="ti ti-check" aria-hidden="true"></i> Salvar equipe</button></div>
+      </div>
+    </div>`;
+}
+async function salvarEquipeEncarregado(id) {
+  const ids = [...document.querySelectorAll('.eq-lista input:checked')].map(i => +i.value);
+  try { await req('PUT', `/auth/usuarios/${id}/equipe`, { eletricista_ids: ids }); fecharModal(); toast(ids.length ? `Equipe salva (${ids.length})` : 'Equipe removida'); carregarUsuarios(); }
+  catch (err) { toast(err.message, 'erro'); }
 }
 async function resetarSenhaDiarista(id) {
   const u = S.usuarios.find(x => x.id === id);

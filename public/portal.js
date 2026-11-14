@@ -36,7 +36,7 @@ async function recarregarFerr() { try { P.ferr = await req('GET', '/portal/ferra
 
 function ptIr(tela, extra) {
   P.tela = tela;
-  if (tela === 'apontar') P.ap = novoApontamento(extra);
+  if (tela === 'apontar') P.ap = typeof extra === 'object' && extra ? novoApontamento(extra.dia, extra.equipe) : novoApontamento(extra);
   if (tela === 'mes' && (P.d.ano !== +P.d.hoje.slice(0, 4) || P.d.mes !== +P.d.hoje.slice(5, 7)) && !extra) { carregarPortal(); }
   renderPortal();
   document.querySelector('.pt-main')?.scrollTo(0, 0);
@@ -87,6 +87,7 @@ function ptInicio() {
       ${d.usuario.senha_padrao ? `<button class="pt-aviso" onclick="ptPerfil(true)">${pIco('lock')}<span><b>Troque sua senha</b><br>Você ainda usa a senha inicial 123456. Toque aqui para criar a sua.</span></button>` : ''}
       ${cartao}
       ${!o && !h ? '' : !o ? `<button class="pt-aviso amarelo" onclick="ptIr('apontar','${ontem}')">${pIco('calendar-exclamation')}<span><b>Ontem (${ddmm(ontem)}) ficou sem diária</b><br>Se você trabalhou, toque para apontar.</span></button>` : ''}
+      ${ptCardEquipe()}
       <div class="pt-grid2">
         <div class="pt-card pt-num"><small>Dias em ${MESES[d.mes - 1].toLowerCase()}</small><b>${d.resumo.dias}</b><span>apontados</span></div>
         <div class="pt-card pt-num"><small>Horas extras</small><b>${fmtH(d.resumo.horas_extras)}</b><span>no mês</span></div>
@@ -98,21 +99,83 @@ function ptInicio() {
       </div>
     </div>`;
 }
+function ptCardEquipe() {
+  const d = P.d, eq = d.equipe || [];
+  if (!eq.length) return '';
+  const hoje = d.hoje;
+  const linhas = eq.map(m => {
+    const a = m.recentes[hoje];
+    return `<div class="pt-eq-lin"><span class="pt-eq-av ${a ? 'ok' : ''}">${a ? pIco('check') : esc(primeiroNome(m.nome).slice(0, 2).toUpperCase())}</span>
+      <div style="flex:1;min-width:0"><b>${esc(primeiroNome(m.nome))}</b><small>${a ? esc(a.obras.map(o => o.obra_nome + (o.fracao < 1 ? ' (½)' : '')).join(' + ')) : 'Sem diária hoje'}</small></div></div>`;
+  }).join('');
+  const faltam = eq.filter(m => !m.recentes[hoje]).length;
+  return `<div class="pt-card">
+    <div class="pt-card-tit"><h2>Minha equipe hoje</h2><small class="pt-eq-cont">${eq.length - faltam}/${eq.length} apontados</small></div>
+    ${linhas}
+    <button class="pt-btn ${faltam ? 'pt-btn-p' : ''}" style="margin-top:12px" onclick="ptIr('apontar',{dia:'${hoje}',equipe:true})">${pIco('users-group')} Apontar diária da equipe</button>
+  </div>`;
+}
 function ptLinhaFerrCurta(f) {
   const v = f.ultimo_visto;
   return `<div class="pt-fc"><span class="pt-fc-ico">${pIco('tool')}</span><div><b>${esc(f.nome)}</b><small>${v ? 'Marcada ' + haQuanto(v.data) : ''}</small></div></div>`;
 }
 
 // ── Apontar diária ─────────────────────────────────────────────
-function novoApontamento(dia) {
+function novoApontamento(dia, comEquipe) {
   const d = P.d; dia = dia || d.hoje;
+  const eu = d.funcionario.id;
   const ex = d.recentes[dia];
+  // equipe: ao abrir pela equipe, já marca quem ainda não tem diária no dia (e ele mesmo)
+  const euLivre = !(ex && !ex.editavel);
+  let pessoas = euLivre ? [eu] : [];
+  if (comEquipe) pessoas = [...pessoas, ...(d.equipe || []).filter(m => !m.recentes[dia]).map(m => m.id)];
+  const base = { data: dia, pessoas, comEquipe: !!comEquipe };
   if (ex && ex.meu) {
     const duas = ex.obras.length > 1;
-    return { data: dia, modo: duas ? 'duas' : ex.obras[0]?.fracao < 1 ? 'meio' : 'inteiro', obras: ex.obras.map(o => o.obra_id), he: ex.horas_extras || 0,
+    return { ...base, modo: duas ? 'duas' : ex.obras[0]?.fracao < 1 ? 'meio' : 'inteiro', obras: ex.obras.map(o => o.obra_id), he: ex.horas_extras || 0,
       obs: ((ex.observacao || '').match(/Obs\.: ([^·]+)/) || [])[1]?.trim() || '', existe: true };
   }
-  return { data: dia, modo: 'inteiro', obras: d.ultima_obra_id && d.obras.some(o => o.id === d.ultima_obra_id) ? [d.ultima_obra_id] : [], he: 0, obs: '', existe: false };
+  return { ...base, modo: 'inteiro', obras: d.ultima_obra_id && d.obras.some(o => o.id === d.ultima_obra_id) ? [d.ultima_obra_id] : [], he: 0, obs: '', existe: false };
+}
+function ptRegistroDe(id, dia) {
+  const d = P.d;
+  if (id === d.funcionario.id) return d.recentes[dia];
+  return (d.equipe || []).find(m => m.id === id)?.recentes[dia];
+}
+function ptPessoa(id) {
+  const a = P.ap;
+  if (a.pessoas.includes(id)) a.pessoas = a.pessoas.filter(x => x !== id); else a.pessoas.push(id);
+  renderPortal();
+}
+function ptEquipeTodos(todos) {
+  const d = P.d, eu = d.funcionario.id;
+  const livre = r => !r || r.editavel;
+  const euOk = livre(d.recentes[P.ap.data]) ? [eu] : [];
+  P.ap.pessoas = todos ? [...euOk, ...(d.equipe || []).filter(m => livre(m.recentes[P.ap.data])).map(m => m.id)] : euOk;
+  renderPortal();
+}
+function ptBlocoEquipe() {
+  const d = P.d, a = P.ap, eq = d.equipe || [];
+  if (!eq.length) return '';
+  const eu = d.funcionario.id;
+  const ligado = a.comEquipe || a.pessoas.some(id => id !== eu);
+  if (!ligado) return `<label class="pt-eq-toggle"><input type="checkbox" onchange="P.ap.comEquipe=true;ptEquipeTodos(true)" />
+      <span>${pIco('users-group')} <b>Apontar da equipe também</b><small>${esc(eq.map(m => primeiroNome(m.nome)).join(', '))}</small></span></label>`;
+  const chip = (id, nome) => {
+    const r = ptRegistroDe(id, a.data);
+    const bloq = r && !r.editavel;
+    const on = a.pessoas.includes(id);
+    return `<button class="pt-pessoa ${on ? 'on' : ''}" ${bloq ? 'disabled' : ''} onclick="ptPessoa(${id})" aria-pressed="${on}">
+      <span class="pt-check quad">${on ? pIco('check') : ''}</span>
+      <span style="flex:1;min-width:0;text-align:left"><b>${esc(nome)}</b><small>${bloq ? 'Já lançado pelo escritório' : r ? 'Já tem diária neste dia · será corrigida' : 'Sem diária neste dia'}</small></span></button>`;
+  };
+  return `<div class="pt-card pt-eq-box">
+    <div class="pt-card-tit"><h2>${pIco('users-group')} Quem trabalhou?</h2>
+      <span style="display:flex;gap:4px;align-items:center"><button class="pt-link" onclick="ptEquipeTodos(true)">Todos</button><span style="color:#cbd5e1">|</span><button class="pt-link" onclick="P.ap.comEquipe=false;ptEquipeTodos(false)">Só eu</button></span></div>
+    <p class="pt-mini" style="margin:-2px 0 8px">Desmarque quem não foi trabalhar neste dia.</p>
+    ${chip(eu, primeiroNome(d.funcionario.nome) + ' (eu)')}
+    ${eq.map(m => chip(m.id, primeiroNome(m.nome))).join('')}
+  </div>`;
 }
 
 function ptApontar() {
@@ -120,7 +183,7 @@ function ptApontar() {
   const dias = [...Array(d.dias_para_tras + 1).keys()].map(k => iso(new Date(dt(d.hoje).getTime() - k * 864e5)));
   const rot = (s, k) => k === 0 ? 'Hoje' : k === 1 ? 'Ontem' : PT_DIAS[dt(s).getDay()].replace(/^./, c => c.toUpperCase());
   const ex = d.recentes[a.data];
-  const bloqueado = ex && !ex.meu;
+  const bloqueado = ex && !ex.editavel && !(d.equipe || []).length;
   const busca = P.busca.toLowerCase();
   const ord = [...d.obras].sort((x, y) => (y.id === d.ultima_obra_id) - (x.id === d.ultima_obra_id) || x.nome.localeCompare(y.nome));
   const lista = ord.filter(o => !busca || o.nome.toLowerCase().includes(busca) || a.obras.includes(o.id));
@@ -132,6 +195,7 @@ function ptApontar() {
         const r = d.recentes[s];
         return `<button class="pt-dia ${a.data === s ? 'on' : ''}" onclick="ptDia('${s}')"><b>${rot(s, k)}</b><small>${ddmm(s)}</small>${r ? `<span class="pt-dia-ok">${pIco('check')}</span>` : ''}</button>`;
       }).join('')}</div>
+      ${ptBlocoEquipe()}
       ${bloqueado ? `<div class="pt-card pt-bloq">${pIco('lock')}<div><b>Esse dia já foi lançado pelo escritório</b><br>${esc(ex.obras.map(o => o.obra_nome).join(' + '))}. Se estiver errado, fale com o engenheiro.</div></div>` : `
       <div class="pt-sec">Como foi o dia?</div>
       <div class="pt-ops">
@@ -151,8 +215,8 @@ function ptApontar() {
       </div>
       <label class="pt-campo">Observação <small>(opcional)</small>
         <input id="pt-obs" value="${esc(a.obs)}" oninput="P.ap.obs=this.value" placeholder="Ex: puxei cabo do quadro geral" maxlength="300" /></label>
-      <button class="pt-btn pt-btn-p pt-enviar" id="pt-enviar" onclick="ptEnviar()">${pIco('send')} ${a.existe ? 'Salvar correção' : 'Enviar diária'}</button>
-      ${a.existe ? `<button class="pt-btn pt-btn-perigo" onclick="ptApagarDia()">${pIco('trash')} Apagar este dia</button>` : ''}`}
+      <button class="pt-btn pt-btn-p pt-enviar" id="pt-enviar" onclick="ptEnviar()">${pIco('send')} ${ptTxtEnviar()}</button>
+      ${a.existe && a.pessoas.length === 1 && a.pessoas[0] === d.funcionario.id ? `<button class="pt-btn pt-btn-perigo" onclick="ptApagarDia()">${pIco('trash')} Apagar este dia</button>` : ''}`}
     </div>`;
 }
 function ptListaObras(lista, a, max) {
@@ -170,7 +234,13 @@ function ptReRender(id) {
   const ord = [...P.d.obras].sort((x, y) => (y.id === P.d.ultima_obra_id) - (x.id === P.d.ultima_obra_id) || x.nome.localeCompare(y.nome));
   document.getElementById(id).innerHTML = ptListaObras(ord.filter(o => !busca || o.nome.toLowerCase().includes(busca) || a.obras.includes(o.id)), a, a.modo === 'duas' ? 2 : 1);
 }
-function ptDia(s) { P.ap = novoApontamento(s); renderPortal(); }
+function ptTxtEnviar() {
+  const a = P.ap, n = a.pessoas.length;
+  if (n > 1) return `Enviar diária de ${n} pessoas`;
+  if (n === 1 && a.pessoas[0] !== P.d.funcionario.id) return `Enviar diária de ${primeiroNome((P.d.equipe.find(m => m.id === a.pessoas[0]) || {}).nome)}`;
+  return a.existe ? 'Salvar correção' : 'Enviar diária';
+}
+function ptDia(s) { const com = P.ap && P.ap.comEquipe; P.ap = novoApontamento(s, com); renderPortal(); }
 function ptModo(m) { P.ap.modo = m; if (m !== 'duas') P.ap.obras = P.ap.obras.slice(0, 1); renderPortal(); }
 function ptObra(id) {
   const a = P.ap;
@@ -186,16 +256,18 @@ async function ptEnviar() {
   const a = P.ap;
   if (a.modo === 'duas' && a.obras.length !== 2) { toast('Escolha as duas obras', 'erro'); return; }
   if (!a.obras.length) { toast('Escolha a obra onde você trabalhou', 'erro'); return; }
+  if (!a.pessoas.length) { toast('Marque quem trabalhou neste dia', 'erro'); return; }
   const fr = a.modo === 'inteiro' ? 1 : 0.5;
   const btn = document.getElementById('pt-enviar'); btn.disabled = true; btn.innerHTML = 'Enviando...';
   try {
-    const r = await req('POST', '/portal/apontar', { data: a.data, obras: a.obras.map(id => ({ obra_id: id, fracao: fr })), horas_extras: a.he, observacao: a.obs || null });
+    const r = await req('POST', '/portal/apontar', { data: a.data, obras: a.obras.map(id => ({ obra_id: id, fracao: fr })), horas_extras: a.he, observacao: a.obs || null, eletricista_ids: a.pessoas });
     if (!r) return;
-    P.enviado = { ...r, corrigida: a.existe };
-    P.d.recentes[a.data] = r;
+    const meu = r.itens.find(x => x.eletricista_id === P.d.funcionario.id);
+    P.enviado = { ...(meu || r.itens[0]), itens: r.itens, corrigida: r.corrigiu };
+    if (meu) P.d.recentes[a.data] = meu;
     P.tela = 'enviado'; renderPortal(); vibrar('ok');
     carregarPortal(P.d.ano, P.d.mes).then(() => { if (P.tela === 'enviado') renderPortal(); });
-  } catch (err) { toast(err.message, 'erro'); btn.disabled = false; btn.innerHTML = `${pIco('send')} ${a.existe ? 'Salvar correção' : 'Enviar diária'}`; }
+  } catch (err) { toast(err.message, 'erro'); btn.disabled = false; btn.innerHTML = `${pIco('send')} ${ptTxtEnviar()}`; }
 }
 async function ptApagarDia() {
   if (!confirm(`Apagar a diária de ${ddmm(P.ap.data)}?`)) return;
@@ -235,16 +307,17 @@ function ptEnviado() {
   return `
     <div class="pt-pad pt-enviado">
       <div class="pt-ok-ico">${pIco('check')}</div>
-      <h1>${e.corrigida ? 'Diária corrigida!' : 'Diária enviada!'}</h1>
+      <h1>${(e.itens || []).length > 1 ? (e.corrigida ? 'Diárias salvas!' : 'Diárias enviadas!') : e.corrigida ? 'Diária corrigida!' : 'Diária enviada!'}</h1>
       <p>O escritório já foi avisado. Você acompanha tudo em <b>Meu mês</b>.</p>
       <div class="pt-card pt-resumo">
         <div><span>Data</span><b>${e.data ? PT_DIAS[dt(e.data).getDay()].replace(/^./, c => c.toUpperCase()) + ', ' + ddmm(e.data) : ''}</b></div>
         <div><span>Obra</span><b>${esc((e.obras || []).map(o => o.obra_nome + (o.fracao < 1 ? ' (½)' : '')).join(' + '))}</b></div>
         <div><span>Hora extra</span><b>${e.horas_extras ? fmtH(e.horas_extras) : '—'}</b></div>
+        ${(e.itens || []).length > 1 || (e.itens && e.itens[0] && e.itens[0].eletricista_id !== P.d.funcionario.id) ? `<div><span>Pessoas</span><b>${esc(e.itens.map(x => primeiroNome(x.nome)).join(', '))}</b></div>` : ''}
       </div>
       <p class="pt-mini">Errou algo? Dá para corrigir até 2 dias depois.</p>
       <div class="pt-acoes">
-        <button class="pt-btn" onclick="ptIr('apontar','${e.data}')">${pIco('edit')} Corrigir</button>
+        <button class="pt-btn" onclick="ptIr('apontar',{dia:'${e.data}',equipe:${(e.itens || []).length > 1}})">${pIco('edit')} Corrigir</button>
         <button class="pt-btn pt-btn-p" onclick="ptIr('inicio')">Voltar ao início</button>
       </div>
     </div>`;
@@ -374,7 +447,7 @@ function ptMes() {
   const lista = [...d.apontamentos].reverse().map(a => `
     <div class="pt-dia-lin"><div class="pt-dl-data"><b>${a.data.slice(8, 10)}</b><small>${PT_DIAS[dt(a.data).getDay()].slice(0, 3)}</small></div>
       <div style="flex:1;min-width:0"><b>${esc(a.obras.map(o => o.obra_nome + (o.fracao < 1 ? ' (½)' : '')).join(' + '))}</b>
-      <small>${a.horas_extras ? fmtH(a.horas_extras) + ' extra · ' : ''}${a.meu ? 'apontado por você' : 'lançado pelo escritório'}</small></div>
+      <small>${a.horas_extras ? fmtH(a.horas_extras) + ' extra · ' : ''}${{ voce: 'apontado por você', encarregado: 'apontado pelo encarregado', funcionario: 'apontado no app', escritorio: 'lançado pelo escritório' }[a.origem] || ''}</small></div>
       ${a.editavel ? `<button class="pt-pin" onclick="ptIr('apontar','${a.data}')" aria-label="Corrigir dia ${ddmm(a.data)}">${pIco('edit')}</button>` : ''}</div>`).join('');
   return `
     <div class="pt-tit"><button class="pt-voltar" onclick="ptIr('inicio')" aria-label="Voltar">${pIco('arrow-left')}</button><h1>Meu mês</h1></div>
