@@ -742,7 +742,7 @@ function renderOrcs(main) {
       <td class="td-acoes">
         <div style="display:flex;gap:4px;justify-content:flex-end">
           <button class="btn" onclick="event.stopPropagation();dupOrc(${o.id})" title="Duplicar"><i class="ti ti-copy" aria-hidden="true"></i></button>
-          <button class="btn" onclick="event.stopPropagation();pdfOrc(${o.id})" title="PDF"><i class="ti ti-file-download" aria-hidden="true"></i></button>
+          <button class="btn btn-whats" onclick="event.stopPropagation();pdfOrc(${o.id})" title="PDF / Enviar pelo WhatsApp"><i class="ti ti-brand-whatsapp" aria-hidden="true"></i></button>
           <button class="btn" onclick="event.stopPropagation();delOrc(${o.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
         </div>
       </td>
@@ -788,31 +788,77 @@ function addItem() { const desc = (document.getElementById('n-desc')?.value || '
 function atualizarTotalFixo() { const t = totalOrc(); const el = document.querySelector('.total-fixo-valor'); if (el) el.textContent = 'R$ ' + fmtBR(t); const tv = document.querySelector('.tv'); if (tv) tv.textContent = 'R$ ' + fmtBR(t); }
 function prevItem() { const qtd = parseFloat(document.getElementById('n-qtd')?.value) || 0; const vunit = parseFloat(document.getElementById('n-vunit')?.value) || 0; const prev = qtd * vunit; const bar = document.getElementById('preview-bar'); if (!bar) return; if (prev > 0) { const tot = totalOrc() + prev; bar.innerHTML = `<div class="preview-bar"><span style="color:var(--text-muted);font-size:12px">Este item:</span><span style="font-weight:500;color:#1d4ed8;font-size:12px;flex:1;margin-left:6px">+ R$ ${fmtBR(prev)}</span><span style="font-size:12px;color:var(--text-muted)">→ Total:</span><span style="font-weight:500;color:var(--text-primary);font-size:12px;margin-left:6px">R$ ${fmtBR(tot)}</span></div>`; } else bar.innerHTML = ''; }
 
-async function salvarOrc() {
+async function salvarOrc(silencioso) {
   const o = S.orc; if (!o) return;
   try {
     const u = await req('PUT', `/orcamentos/${o.id}`, { cliente_nome: o.cliente_nome, cliente_cnpj: o.cliente_cnpj, cliente_endereco: o.cliente_endereco, obra_descricao: o.obra_descricao, data: o.data, validade: parseInt(o.validade) || 10, status: o.status, obs: o.obs, itens: (o.itens || []).map((it, i) => ({ descricao: it.descricao, und: it.und, qtd: parseFloat(it.qtd) || 0, vunit: parseFloat(it.vunit) || 0, ordem: i })) });
-    S.orc = u; S.orcamentos = S.orcamentos.map(x => x.id === u.id ? u : x); toast('Salvo!'); renderMain();
-  } catch (err) { toast(err.message, 'erro'); }
+    S.orc = u; S.orcamentos = S.orcamentos.map(x => x.id === u.id ? u : x);
+    if (silencioso) return u;
+    toast('Salvo!'); renderMain();
+  } catch (err) { if (silencioso) throw err; toast(err.message, 'erro'); }
 }
 
 async function dupOrc(id) { const o = S.orcamentos.find(x => x.id === id); if (!o) return; try { const c = await req('POST', '/orcamentos/', { cliente_nome: (o.cliente_nome || '') + ' (cópia)', cliente_cnpj: o.cliente_cnpj, cliente_endereco: o.cliente_endereco, obra_descricao: o.obra_descricao, data: new Date().toISOString().slice(0, 10), validade: o.validade, status: 'Rascunho', obs: o.obs, itens: (o.itens || []).map((it, i) => ({ descricao: it.descricao, und: it.und, qtd: it.qtd, vunit: it.vunit, ordem: i })) }); S.orcamentos = [c, ...S.orcamentos]; S.orc = c; toast('Duplicado!'); renderMain(); } catch (err) { toast(err.message, 'erro'); } }
 async function delOrc(id) { if (!confirm('Excluir este orçamento?')) return; try { await req('DELETE', `/orcamentos/${id}`); S.orcamentos = S.orcamentos.filter(o => o.id !== id); if (S.orc?.id === id) S.orc = null; toast('Excluído!'); renderMain(); } catch (err) { toast(err.message, 'erro'); } }
-function pdfOrc(id) { const o = S.orcamentos.find(x => x.id === id) || S.orc; if (o) imprimirPDF(o); }
+// PDF do orçamento: gerado no servidor (com a marca) e enviado como arquivo
+async function pdfOrc(id) {
+  const noEditor = S.orc && S.orc.id === id;
+  document.getElementById('modal-root').innerHTML = `<div class="modal-overlay"><div class="modal" style="max-width:380px;text-align:center"><div class="spinner" style="margin:10px auto"></div><p style="font-size:13px;color:var(--text-muted)">${noEditor ? 'Salvando e gerando' : 'Gerando'} o PDF...</p></div></div>`;
+  try {
+    if (noEditor) await salvarOrc(true);
+    const o = (noEditor ? S.orc : S.orcamentos.find(x => x.id === id)) || {};
+    const { blob } = await reqArquivo(`/orcamentos/${id}/pdf`);
+    const cli = (o.cliente_nome || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w]+/g, '_').replace(/^_|_$/g, '').slice(0, 40);
+    S.orcPdf = { arquivo: new File([blob], `Orcamento_${o.numero || id}${cli ? '_' + cli : ''}.pdf`, { type: 'application/pdf' }), orc: o };
+    const total = (o.itens || []).reduce((a, it) => a + (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0), 0);
+    const podeCompartilhar = !!(navigator.canShare && navigator.canShare({ files: [S.orcPdf.arquivo] }));
+    document.getElementById('modal-root').innerHTML = `
+      <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+        <div class="modal" style="max-width:420px">
+          <div class="modal-header"><span class="modal-title">PDF pronto</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+          <div class="pdf-pronto"><i class="ti ti-file-type-pdf" aria-hidden="true"></i><div style="min-width:0"><div class="pp-nome">${esc(S.orcPdf.arquivo.name)}</div>
+            <div class="pp-info">${esc(o.cliente_nome || 'Sem cliente')} · R$ ${fmtBR(total)}</div></div></div>
+          <button class="btn btn-whats btn-full" onclick="enviarOrcWhats()"><i class="ti ti-brand-whatsapp" aria-hidden="true"></i> Enviar pelo WhatsApp</button>
+          <p style="font-size:11.5px;color:var(--text-muted);margin:6px 2px 12px">${podeCompartilhar ? 'Escolha o WhatsApp na lista e depois a conversa. O PDF vai anexado.' : 'No computador: o PDF é baixado e o WhatsApp abre para você escolher a conversa e anexar o arquivo (clipe 📎).'}</p>
+          <div style="display:flex;gap:8px">
+            <button class="btn" style="flex:1;justify-content:center" onclick="abrirOrcPdf()"><i class="ti ti-eye" aria-hidden="true"></i> Ver PDF</button>
+            <button class="btn" style="flex:1;justify-content:center" onclick="baixarArquivo(S.orcPdf.arquivo)"><i class="ti ti-download" aria-hidden="true"></i> Baixar</button>
+          </div>
+        </div>
+      </div>`;
+  } catch (err) { fecharModal(); toast(err.message, 'erro'); }
+}
 
-function imprimirPDF(orc) {
-  const total = (orc.itens || []).reduce((a, it) => a + (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0), 0);
-  const linhas = (orc.itens || []).map((it, i) => { const vt = (parseFloat(it.qtd) || 0) * (parseFloat(it.vunit) || 0); return `<tr style="background:${i % 2 === 0 ? '#fff' : '#f5f7f5'}"><td style="text-align:center;padding:5px">${String(i + 1).padStart(2, '0')}</td><td style="padding:5px">${esc(it.descricao)}</td><td style="text-align:center;padding:5px">${esc(it.und)}</td><td style="text-align:right;padding:5px">${fmtBR(it.qtd)}</td><td style="text-align:right;padding:5px">${fmtBR(it.vunit)}</td><td style="text-align:right;padding:5px;font-weight:700;color:#1a3a5c">${fmtBR(vt)}</td></tr>`; }).join('');
-  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:10px}.h{background:#1a3a5c;padding:14px 20px;display:flex;justify-content:space-between}.en{color:#f5a623;font-size:20px;font-weight:bold}.ei{color:#aac;font-size:8px;margin-top:4px}.no{color:rgba(245,166,35,.7);font-size:9px;text-align:right}.no strong{color:#f5a623;font-size:13px;display:block}.cb{padding:10px 20px;border-bottom:1px solid #ddd}.cn{font-size:11px;font-weight:bold}.ob{font-size:10px;font-weight:bold;color:#0e4e64;margin-top:6px}table{width:calc(100% - 40px);margin:10px 20px 0;border-collapse:collapse;font-size:9px}thead tr{background:#1a3a5c}thead th{color:#f5a623;font-weight:bold;padding:6px 5px;font-size:8px;text-transform:uppercase}td{border-bottom:1px solid #eee}.tb{background:#0f2d4a;margin:0 20px;padding:8px 10px;display:flex;justify-content:space-between}.tl{color:rgba(245,166,35,.7);font-size:9px;font-weight:bold}.tv{color:#f5a623;font-size:15px;font-weight:bold}.obs{background:#FFF9C4;margin:10px 20px;padding:8px;font-size:8.5px;color:#504000;white-space:pre-line}.ass{margin:20px 20px 0;border-top:1px solid #888;width:180px;padding-top:4px;font-size:8px;color:#888}.rod{text-align:center;font-size:7px;color:#bbb;margin-top:20px;padding-bottom:10px}</style></head><body>
-<div class="h"><div><div class="en">AZ ELÉTRICA</div><div class="ei">Fone (88)98161-0318 · Elderazevedo22@hotmail.com · CNPJ: 63.824.949/0001-26</div></div><div class="no"><strong>${esc(orc.numero || orc.id)}</strong>Data: ${fmtData(orc.data)}</div></div>
-<div class="cb"><div class="cn">${esc(orc.cliente_nome || '—')}${orc.cliente_cnpj ? ' — CNPJ: ' + esc(orc.cliente_cnpj) : ''}</div>${orc.cliente_endereco ? `<div style="font-size:9px;color:#555">Endereço: ${esc(orc.cliente_endereco)}</div>` : ''}${orc.obra_descricao ? `<div class="ob">Objeto: ${esc(orc.obra_descricao)}</div>` : ''}</div>
-<table><thead><tr><th style="width:28px">Nº</th><th>Descrição</th><th style="width:52px;text-align:center">UND</th><th style="width:40px;text-align:right">Qtd</th><th style="width:70px;text-align:right">Vl unit</th><th style="width:75px;text-align:right">Vl total</th></tr></thead><tbody>${linhas}</tbody></table>
-<div class="tb"><span class="tl">VALOR TOTAL</span><span class="tv">R$ ${fmtBR(total)}</span></div>
-<div class="obs">OBS: Orçamento válido por ${orc.validade || 10} dias. — Amontada – CE, ${fmtData(orc.data)}${orc.obs ? '\n' + orc.obs : ''}</div>
-<div class="ass">Assinatura / AZ Elétrica</div>
-<div class="rod">Documento gerado por AZ Elétrica</div>
-</body></html>`;
-  const w = window.open('', '_blank'); w.document.write(html); w.document.close(); w.onload = () => w.print();
+function abrirOrcPdf() {
+  if (!S.orcPdf) return;
+  const u = URL.createObjectURL(S.orcPdf.arquivo);
+  if (!window.open(u, '_blank')) window.location.href = u;
+}
+
+function enviarOrcWhats() {
+  const p = S.orcPdf; if (!p) return;
+  const o = p.orc || {};
+  const texto = `Olá${o.cliente_nome ? ', ' + o.cliente_nome : ''}! Segue o orçamento ${o.numero || ''}${o.obra_descricao ? ' (' + o.obra_descricao + ')' : ''} da AZ Elétrica. Qualquer dúvida, estamos à disposição.`;
+  if (navigator.canShare && navigator.canShare({ files: [p.arquivo] })) {
+    // chamado direto no toque (sem await antes) para o celular abrir a lista de apps
+    navigator.share({ files: [p.arquivo], title: p.arquivo.name.replace(/\.pdf$/, '') })
+      .then(() => { fecharModal(); marcarOrcEnviado(o); })
+      .catch(err => { if (err?.name !== 'AbortError') toast('Não foi possível compartilhar: ' + err.message, 'erro'); });
+    return;
+  }
+  baixarArquivo(p.arquivo);
+  window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
+  toast('PDF baixado. No WhatsApp, escolha a conversa e anexe o arquivo.');
+  marcarOrcEnviado(o);
+}
+
+async function marcarOrcEnviado(o) {
+  if (!o?.id || o.status !== 'Rascunho') return;
+  try {
+    const u = await req('PUT', `/orcamentos/${o.id}`, { cliente_nome: o.cliente_nome, cliente_cnpj: o.cliente_cnpj, cliente_endereco: o.cliente_endereco, obra_descricao: o.obra_descricao, data: o.data, validade: parseInt(o.validade) || 10, status: 'Enviado', obs: o.obs, itens: (o.itens || []).map((it, i) => ({ descricao: it.descricao, und: it.und, qtd: parseFloat(it.qtd) || 0, vunit: parseFloat(it.vunit) || 0, ordem: i })) });
+    S.orcamentos = S.orcamentos.map(x => x.id === u.id ? u : x); if (S.orc?.id === u.id) S.orc = u;
+    toast('Orçamento marcado como "Enviado"'); renderMain();
+  } catch { /* não atrapalha o envio */ }
 }
 
 function renderEditorOrc(main) {
@@ -823,7 +869,7 @@ function renderEditorOrc(main) {
       <button class="btn-voltar" onclick="fecharOrc()"><i class="ti ti-arrow-left" aria-hidden="true"></i> Orçamentos</button>
       <div class="et-info" style="flex:1;min-width:0"><div class="editor-titulo">${esc(o.cliente_nome || 'Novo orçamento')}</div><div style="font-size:11px;color:var(--text-muted)">${esc(o.numero || '')} · ${fmtData(o.data)}</div></div>
       <div class="et-acoes" style="display:flex;gap:7px">
-        <button class="btn" onclick="pdfOrc(${o.id})"><i class="ti ti-file-download" aria-hidden="true"></i> PDF</button>
+        <button class="btn btn-whats" onclick="pdfOrc(${o.id})"><i class="ti ti-brand-whatsapp" aria-hidden="true"></i> PDF / Enviar</button>
         <button class="btn btn-p" onclick="salvarOrc()"><i class="ti ti-device-floppy" aria-hidden="true"></i> Salvar</button>
       </div>
     </div>
@@ -1308,10 +1354,12 @@ function renderFerramentas(main) {
       f.locais.map(l => chipLocal(l.obra_nome, l.quantidade, (filtro && +filtro === l.obra_id) ? '#fde68a' : '#dbeafe')).join('');
     return `<tr>
       <td><div style="font-weight:500;color:var(--text-primary)">${esc(f.nome)}</div>
-        ${f.observacao ? `<div style="font-size:11px;color:var(--text-muted)">${esc(f.observacao)}</div>` : ''}</td>
+        ${f.observacao ? `<div style="font-size:11px;color:var(--text-muted)">${esc(f.observacao)}</div>` : ''}
+        ${blocoVisto(f)}</td>
       <td style="text-align:center;font-weight:600">${f.quantidade_total}<span class="so-mobile"> un.</span></td>
       <td>${chips || '<span style="color:var(--text-muted)">—</span>'}</td>
       <td><div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-visto" onclick="abrirModalVisto(${f.id})" title="Registrar onde viu"><i class="ti ti-map-pin" aria-hidden="true"></i> Vi aqui</button>
         <button class="btn btn-p" onclick="abrirModalMover(${f.id})" title="Mover"><i class="ti ti-arrows-exchange" aria-hidden="true"></i> Mover</button>
         <button class="btn" onclick="abrirHistFerr(${f.id})" title="Histórico"><i class="ti ti-history" aria-hidden="true"></i></button>
         <button class="btn" onclick="abrirModalFerr(${f.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
@@ -1345,6 +1393,101 @@ function renderFerramentas(main) {
         </table>
       </div>
     </div>`;
+  carregarFotosVisto(main);
+}
+
+// ── Último lugar visto (com foto) ──────────────────────────────
+function haQuanto(iso) {
+  const d = Math.round((new Date(new Date().toISOString().slice(0, 10) + 'T12:00:00') - new Date(iso + 'T12:00:00')) / 86400000);
+  return d <= 0 ? 'hoje' : d === 1 ? 'ontem' : `há ${d} dias`;
+}
+function blocoVisto(f) {
+  const v = f.ultimo_visto;
+  if (!v) return `<button class="visto-vazio" onclick="abrirModalVisto(${f.id})"><i class="ti ti-map-pin-plus" aria-hidden="true"></i> Registrar onde foi vista</button>`;
+  return `<div class="visto" onclick="abrirHistFerr(${f.id})" title="Ver histórico de onde foi vista">
+    ${v.tem_foto ? `<img class="visto-foto" data-visto-foto="${v.id}" alt="Foto" />` : '<span class="visto-foto sem"><i class="ti ti-map-pin" aria-hidden="true"></i></span>'}
+    <div class="visto-txt"><div class="visto-rot">Visto por último</div><div class="visto-local">${esc(v.local)}</div>
+    <div class="visto-quando">${fmtData(v.data)} · ${haQuanto(v.data)}${v.registrado_por ? ' · ' + esc(v.registrado_por.split(' ').slice(0, 2).join(' ')) : ''}</div></div></div>`;
+}
+S.fotoVisto = {};
+async function urlFotoVisto(vid) {
+  if (!S.fotoVisto[vid]) S.fotoVisto[vid] = reqArquivo(`/ferramentas/vistos/${vid}/foto`).then(r => URL.createObjectURL(r.blob)).catch(() => { delete S.fotoVisto[vid]; return ''; });
+  return S.fotoVisto[vid];
+}
+function carregarFotosVisto(raiz) {
+  (raiz || document).querySelectorAll('img[data-visto-foto]').forEach(async img => {
+    const u = await urlFotoVisto(img.dataset.vistoFoto); if (u) img.src = u;
+  });
+}
+async function verFotoVisto(vid, titulo) {
+  const u = await urlFotoVisto(vid); if (!u) { toast('Não foi possível abrir a foto', 'erro'); return; }
+  const div = document.createElement('div'); div.className = 'foto-zoom';
+  div.innerHTML = `<div class="fz-top"><span>${esc(titulo || '')}</span><button class="btn" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button></div><img src="${u}" alt="Foto" />`;
+  div.onclick = () => div.remove(); document.body.appendChild(div);
+}
+
+function abrirModalVisto(id) {
+  const f = S.ferr.find(x => x.id === id);
+  const locais = new Set(['Depósito']);
+  f.locais.forEach(l => locais.add(l.obra_nome));
+  S.obras.filter(o => o.status !== 'Concluída').forEach(o => locais.add(o.nome));
+  (S.ferr || []).forEach(x => x.ultimo_visto && locais.add(x.ultimo_visto.local));
+  S.vistoFoto = null;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">Onde está · ${esc(f.nome)}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Local onde foi vista *</label>
+          <input id="mv-local" list="mv-locais" placeholder="Obra, carro, casa de alguém, depósito..." value="${esc(f.locais.length === 1 && !f.deposito ? f.locais[0].obra_nome : '')}" />
+          <datalist id="mv-locais">${[...locais].sort((a, b) => a.localeCompare(b)).map(l => `<option value="${esc(l)}"></option>`).join('')}</datalist></div>
+        <div class="form-grid2">
+          <div class="field"><label>Data</label><input id="mv-data" type="date" value="${new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10)}" /></div>
+          <div class="field"><label>Foto</label>
+            <label class="btn btn-foto" for="mv-foto"><i class="ti ti-camera" aria-hidden="true"></i> <span id="mv-foto-rot">Tirar / escolher foto</span></label>
+            <input id="mv-foto" type="file" accept="image/*" capture="environment" style="display:none" onchange="escolheuFotoVisto(this)" /></div>
+        </div>
+        <div id="mv-prev"></div>
+        <div class="field"><label>Observação</label><input id="mv-obs" placeholder="Ex: no quarto de ferramentas, com o Juan, em cima do andaime..." /></div>
+        <p style="font-size:12px;color:var(--text-muted);margin:0">Isto só registra onde a ferramenta foi vista. Para mudar as quantidades por obra, use "Mover".</p>
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" id="mv-salvar" onclick="salvarVisto(${f.id})"><i class="ti ti-map-pin" aria-hidden="true"></i> Salvar</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById('mv-local')?.focus(), 50);
+}
+function escolheuFotoVisto(inp) {
+  const f = inp.files?.[0]; if (!f) return;
+  S.vistoFoto = f;
+  document.getElementById('mv-foto-rot').textContent = 'Trocar foto';
+  document.getElementById('mv-prev').innerHTML = `<div class="mv-prev"><img src="${URL.createObjectURL(f)}" alt="Prévia" /><button class="btn" onclick="S.vistoFoto=null;document.getElementById('mv-prev').innerHTML='';document.getElementById('mv-foto-rot').textContent='Tirar / escolher foto'"><i class="ti ti-trash" aria-hidden="true"></i> Remover</button></div>`;
+}
+async function salvarVisto(id) {
+  const local = document.getElementById('mv-local').value.trim();
+  if (!local) { toast('Informe onde a ferramenta foi vista', 'erro'); return; }
+  const btn = document.getElementById('mv-salvar'); btn.disabled = true; btn.textContent = 'Salvando...';
+  try {
+    const fd = new FormData();
+    fd.append('local', local);
+    const obra = S.obras.find(o => o.nome.trim().toLowerCase() === local.toLowerCase()); if (obra) fd.append('obra_id', obra.id);
+    const d = document.getElementById('mv-data').value; if (d) fd.append('data', d);
+    const o = document.getElementById('mv-obs').value.trim(); if (o) fd.append('observacao', o);
+    if (S.vistoFoto) {
+      const f = await comprimirImagem(S.vistoFoto, 1280, 0.8);
+      if (f.size > 8 * 1024 * 1024) throw new Error('Foto maior que 8 MB');
+      fd.append('foto', f, f.name || 'foto.jpg');
+    }
+    const res = await fetch(API + `/ferramentas/${id}/visto`, { method: 'POST', headers: { Authorization: 'Bearer ' + window._TOKEN }, body: fd });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.detail || 'Erro ' + res.status); }
+    S.vistoFoto = null; fecharModal(); toast('Local registrado!'); carregarFerramentas();
+  } catch (err) { toast(err.message, 'erro'); btn.disabled = false; btn.innerHTML = '<i class="ti ti-map-pin" aria-hidden="true"></i> Salvar'; }
+}
+async function excluirVisto(vid, fid) {
+  if (!confirm('Excluir este registro de "visto"?')) return;
+  try { await req('DELETE', `/ferramentas/vistos/${vid}`); toast('Excluído'); await carregarFerramentas(); abrirHistFerr(fid); }
+  catch (err) { toast(err.message, 'erro'); }
 }
 
 function abrirModalFerr(id) {
@@ -1439,8 +1582,15 @@ async function moverFerr(id) {
 
 async function abrirHistFerr(id) {
   const f = S.ferr.find(x => x.id === id);
-  let hist = [];
-  try { hist = await req('GET', `/ferramentas/${id}/historico`) || []; } catch (err) { toast(err.message, 'erro'); return; }
+  let hist = [], vistos = [];
+  try { [hist, vistos] = await Promise.all([req('GET', `/ferramentas/${id}/historico`), req('GET', `/ferramentas/${id}/vistos`)]); hist = hist || []; vistos = vistos || []; }
+  catch (err) { toast(err.message, 'erro'); return; }
+  const lv = vistos.map(v => `<div class="visto-item">
+      ${v.tem_foto ? `<img class="visto-foto" data-visto-foto="${v.id}" alt="Foto" onclick="verFotoVisto(${v.id}, '${esc((f.nome + ' · ' + v.local).replace(/'/g, ''))}')" />` : '<span class="visto-foto sem"><i class="ti ti-map-pin" aria-hidden="true"></i></span>'}
+      <div class="visto-txt" style="flex:1"><div class="visto-local">${esc(v.local)}</div>
+        <div class="visto-quando">${fmtData(v.data)} · ${haQuanto(v.data)}${v.registrado_por ? ' · ' + esc(v.registrado_por) : ''}</div>
+        ${v.observacao ? `<div class="visto-quando" style="color:#334155">${esc(v.observacao)}</div>` : ''}</div>
+      <button class="btn" onclick="excluirVisto(${v.id}, ${id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button></div>`).join('');
   const linhas = hist.map(h => `<tr><td>${fmtData(h.data)}</td><td style="text-align:center">${h.quantidade}</td>
     <td>${esc(h.origem)} <i class="ti ti-arrow-right" aria-hidden="true"></i> <b>${esc(h.destino)}</b></td>
     <td style="color:var(--text-muted)">${esc(h.observacao || '')}</td></tr>`).join('');
@@ -1448,12 +1598,17 @@ async function abrirHistFerr(id) {
     <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
       <div class="modal" style="max-width:640px">
         <div class="modal-header"><span class="modal-title">Histórico · ${esc(f.nome)}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
-        <div style="max-height:60vh;overflow:auto"><table>
+        <div style="max-height:70vh;overflow:auto">
+        <div class="hist-sec"><span><i class="ti ti-map-pin" aria-hidden="true"></i> Onde foi vista</span><button class="btn btn-visto" onclick="abrirModalVisto(${id})"><i class="ti ti-plus" aria-hidden="true"></i> Vi aqui</button></div>
+        ${lv || '<p class="empty" style="padding:8px 0">Ainda não foi registrado onde foi vista.</p>'}
+        <div class="hist-sec"><span><i class="ti ti-arrows-exchange" aria-hidden="true"></i> Movimentações</span></div>
+        <table>
           <thead><tr><th>Data</th><th style="text-align:center">Qtd</th><th>Movimento</th><th>Obs.</th></tr></thead>
           <tbody>${linhas || '<tr><td colspan="4" class="empty">Sem movimentações</td></tr>'}</tbody>
         </table></div>
       </div>
     </div>`;
+  carregarFotosVisto(document.getElementById('modal-root'));
 }
 
 // ── CALENDÁRIO DO FUNCIONÁRIO (dias trabalhados no mês) ───────
