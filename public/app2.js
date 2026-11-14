@@ -1070,7 +1070,11 @@ async function carregarFolha() {
   if (S.tela !== 'folha' || !main) return;
   main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Calculando folha...</p></div>';
   try {
-    S.folha = await req('GET', `/financeiro/folha?ano=${S.finAno}&mes=${S.finMes}`);
+    const [f, st] = await Promise.all([
+      req('GET', `/financeiro/folha?ano=${S.finAno}&mes=${S.finMes}`),
+      req('GET', `/comprovantes/status?ano=${S.finAno}&mes=${S.finMes}`).catch(() => ({})),
+    ]);
+    S.folha = f; S.folhaPagos = st || {};
     renderFolha(main);
   } catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
 }
@@ -1081,7 +1085,7 @@ function renderFolha(main) {
   const neg = v => v ? `<span style="color:#b91c1c">− ${fmtBR(v)}</span>` : '<span style="color:var(--text-muted)">—</span>';
   const linhas = f.linhas.map(l => `
     <tr>
-      <td class="td-titulo link-cal" onclick="abrirCalendario(${l.eletricista_id})" title="Ver dias trabalhados"><div style="font-weight:500;color:var(--text-primary)">${esc(l.nome)} <i class="ti ti-calendar-event" aria-hidden="true" style="color:#9aa5b4;font-size:13px"></i></div>
+      <td class="td-titulo link-cal" onclick="abrirCalendario(${l.eletricista_id})" title="Ver dias trabalhados"><div style="font-weight:500;color:var(--text-primary)">${esc(l.nome)} <i class="ti ti-calendar-event" aria-hidden="true" style="color:#9aa5b4;font-size:13px"></i>${(S.folhaPagos || {})[l.eletricista_id] ? ' <span class="badge b-g" title="Comprovante anexado"><i class="ti ti-check" aria-hidden="true"></i> pago</span>' : ''}</div>
         <div style="font-size:11px;color:var(--text-muted)">${l.tipo_contrato === 'Mensalista' ? 'Mensalista' : l.dias + ' dia(s) apontado(s)'}</div></td>
       <td data-label="${l.tipo_contrato === 'Mensalista' ? 'Fixo' : 'Diárias'}" style="text-align:right">${l.tipo_contrato === 'Mensalista' ? fmtBR(l.salario_fixo) + ' <span class="badge" style="font-size:10px">fixo</span>' : fmtBR(l.valor_diarias)}</td>
       <td data-label="Adicionais" class="${l.adicionais ? '' : 'td-vazio'}" style="text-align:right">${l.adicionais ? '+ ' + fmtBR(l.adicionais) : '<span style="color:var(--text-muted)">—</span>'}</td>
@@ -1478,12 +1482,13 @@ async function carregarCalendario() {
     if (S.cal !== c) return;              // usuário já fechou ou trocou
     c.dados = lista; renderCalendario();
   } catch (err) { toast(err.message, 'erro'); }
+  carregarPagamentoCal();
 }
 
 function mudarMesCal(delta) {
   const c = S.cal; let m = c.mes + delta, a = c.ano;
   if (m < 1) { m = 12; a--; } if (m > 12) { m = 1; a++; }
-  c.mes = m; c.ano = a; c.dados = null; c.dia = null; c.edit = null; renderCalendario(); carregarCalendario();
+  c.mes = m; c.ano = a; c.dados = null; c.dia = null; c.edit = null; c.comps = undefined; c.folhaLinha = null; renderCalendario(); carregarCalendario();
 }
 function selecionarDiaCal(d) { if (S.cal.edit) return; S.cal.dia = S.cal.dia === d ? null : d; renderCalendario(); }
 function fecharCalendario() {
@@ -1568,6 +1573,7 @@ function renderCalendario() {
         ${carregando ? '<div class="loading" style="height:60px"><div class="spinner"></div></div>' : ''}
         ${detalhe || (carregando ? '' : '<p class="cal-dica">Toque num dia marcado para ver, editar ou excluir. Toque num dia vazio para lançar uma diária.</p>')}
         ${legenda ? `<div class="cal-legenda">${legenda}</div>` : ''}
+        ${c.edit ? '' : blocoPagamentoCal()}
       </div>
     </div>`;
 }
@@ -1770,6 +1776,180 @@ async function salvarUsuario(id) {
     }
     fecharModal(); toast(id ? 'Usuário atualizado!' : 'Usuário criado!'); carregarUsuarios();
   } catch (err) { toast(err.message, 'erro'); }
+}
+
+// ── PAGAMENTO DO MÊS: comprovantes, PDF de resumo e envio ─────
+async function reqArquivo(path) {
+  const res = await fetch(API + path, { headers: { Authorization: 'Bearer ' + window._TOKEN } });
+  if (res.status === 401) { logout(); throw new Error('Sessão expirada'); }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.detail || 'Erro ' + res.status); }
+  const nome = (/filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '') || [])[1] || 'arquivo';
+  return { blob: await res.blob(), nome };
+}
+
+async function carregarPagamentoCal() {
+  const c = S.cal; if (!c) return;
+  try {
+    const [comps, folha] = await Promise.all([
+      req('GET', `/comprovantes?eletricista_id=${c.eid}&ano=${c.ano}&mes=${c.mes}`),
+      req('GET', `/financeiro/folha?ano=${c.ano}&mes=${c.mes}`),
+    ]);
+    if (S.cal !== c) return;
+    c.comps = comps || []; c.folhaLinha = (folha?.linhas || []).find(l => l.eletricista_id === c.eid) || null;
+    renderCalendario();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+function blocoPagamentoCal() {
+  const c = S.cal;
+  if (c.comps === undefined) return '<div class="cal-pag"><div class="loading" style="height:50px"><div class="spinner"></div></div></div>';
+  const fl = c.folhaLinha;
+  const comps = (c.comps || []).map(cp => `
+    <div class="pg-comp">
+      <i class="ti ${cp.mime === 'application/pdf' ? 'ti-file-type-pdf' : 'ti-photo'}" aria-hidden="true"></i>
+      <div class="pg-comp-info"><b>${cp.data_pagamento ? fmtData(cp.data_pagamento) : fmtData(cp.criado_em.slice(0, 10))}${cp.valor ? ' · R$ ' + fmtBR(cp.valor) : ''}</b>
+        <span>${esc(cp.observacao || cp.nome_arquivo)}</span></div>
+      <button class="btn" onclick="verComprovante(${cp.id})" title="Ver"><i class="ti ti-eye" aria-hidden="true"></i></button>
+      <button class="btn" onclick="excluirComprovante(${cp.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
+    </div>`).join('');
+  return `<div class="cal-pag">
+    <div class="pg-topo">
+      <div><div class="ce-sub" style="margin:0">Pagamento de ${MESES[c.mes - 1]}</div>
+        ${fl ? `<div class="pg-receber">A receber: <b>R$ ${fmtBR(fl.a_receber)}</b></div>` : '<div class="pg-receber" style="color:#9aa5b4">Sem valores neste mês</div>'}</div>
+      ${(c.comps || []).length ? '<span class="badge b-g"><i class="ti ti-check" aria-hidden="true"></i> Comprovante anexado</span>' : '<span class="badge b-a">Sem comprovante</span>'}
+    </div>
+    ${comps}
+    <input type="file" id="pg-arquivo" accept="image/*,application/pdf" style="display:none" onchange="escolheuComprovante(this)" />
+    <div id="pg-form">${c.arquivoPendente ? formComprovante(c.arquivoPendente) : ''}</div>
+    <div class="pg-acoes">
+      <button class="btn" onclick="document.getElementById('pg-arquivo').click()"><i class="ti ti-paperclip" aria-hidden="true"></i> Anexar comprovante</button>
+      <button class="btn" onclick="abrirPdfResumo()"><i class="ti ti-file-type-pdf" aria-hidden="true"></i> PDF do mês</button>
+      <button class="btn btn-p" onclick="enviarResumo()"><i class="ti ti-send" aria-hidden="true"></i> Enviar</button>
+    </div>
+  </div>`;
+}
+
+// reduz fotos grandes antes de enviar (economiza espaço no banco e dados móveis)
+function comprimirImagem(file, max = 1600, qualidade = 0.82) {
+  return new Promise(resolve => {
+    if (!file.type.startsWith('image/') || file.size < 400 * 1024) return resolve(file);
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const esc_ = Math.min(1, max / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas'); cv.width = Math.round(img.width * esc_); cv.height = Math.round(img.height * esc_);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      cv.toBlob(b => { URL.revokeObjectURL(url); resolve(b && b.size < file.size ? new File([b], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file); }, 'image/jpeg', qualidade);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };   // ex: HEIC fora do Safari
+    img.src = url;
+  });
+}
+
+function escolheuComprovante(inp) {
+  const f = inp.files?.[0]; if (!f) return;
+  S.cal.arquivoPendente = f; inp.value = '';
+  document.getElementById('pg-form').innerHTML = formComprovante(f);
+  document.getElementById('pg-form').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+function formComprovante(f) {
+  const fl = S.cal.folhaLinha;
+  return `
+    <div class="pg-novo">
+      <div class="pg-novo-arq"><i class="ti ${f.type === 'application/pdf' ? 'ti-file-type-pdf' : 'ti-photo'}" aria-hidden="true"></i> ${esc(f.name)} <span>(${(f.size / 1024 / 1024).toFixed(1)} MB)</span></div>
+      <div class="ce-linha">
+        <input id="pg-valor" type="number" step="0.01" inputmode="decimal" placeholder="Valor pago" value="${fl && fl.a_receber > 0 ? fl.a_receber : ''}" />
+        <input id="pg-data" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+      </div>
+      <input id="pg-obs" placeholder="Observação (ex: Pix Inter)" />
+      <div class="ce-linha" style="justify-content:flex-end">
+        <button class="btn" onclick="cancelarComprovante()">Cancelar</button>
+        <button class="btn btn-p" id="pg-salvar" onclick="salvarComprovante()"><i class="ti ti-upload" aria-hidden="true"></i> Salvar comprovante</button>
+      </div>
+    </div>`;
+}
+function cancelarComprovante() { S.cal.arquivoPendente = null; document.getElementById('pg-form').innerHTML = ''; }
+
+async function salvarComprovante() {
+  const c = S.cal; const f0 = c.arquivoPendente; if (!f0) return;
+  const btn = document.getElementById('pg-salvar'); if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
+  try {
+    const f = await comprimirImagem(f0);
+    if (f.size > 8 * 1024 * 1024) throw new Error('Arquivo maior que 8 MB');
+    const fd = new FormData();
+    fd.append('eletricista_id', c.eid); fd.append('ano', c.ano); fd.append('mes', c.mes);
+    const v = document.getElementById('pg-valor').value; if (v) fd.append('valor', v);
+    const d = document.getElementById('pg-data').value; if (d) fd.append('data_pagamento', d);
+    const o = document.getElementById('pg-obs').value.trim(); if (o) fd.append('observacao', o);
+    fd.append('arquivo', f, f.name);
+    const res = await fetch(API + '/comprovantes', { method: 'POST', headers: { Authorization: 'Bearer ' + window._TOKEN }, body: fd });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.detail || 'Erro ' + res.status); }
+    c.arquivoPendente = null; c.alterou = true;
+    toast('Comprovante salvo!'); carregarPagamentoCal();
+  } catch (err) { toast(err.message, 'erro'); if (btn) { btn.disabled = false; btn.textContent = 'Salvar comprovante'; } }
+}
+
+async function verComprovante(id) {
+  const janela = window.open('', '_blank');           // abre já no clique (evita bloqueio de pop-up)
+  try {
+    const { blob } = await reqArquivo(`/comprovantes/${id}/arquivo`);
+    const url = URL.createObjectURL(blob);
+    if (janela) janela.location.href = url; else window.location.href = url;
+  } catch (err) { if (janela) janela.close(); toast(err.message, 'erro'); }
+}
+
+async function excluirComprovante(id) {
+  if (!confirm('Excluir este comprovante?')) return;
+  try { await req('DELETE', `/comprovantes/${id}`); S.cal.alterou = true; toast('Comprovante excluído'); carregarPagamentoCal(); }
+  catch (err) { toast(err.message, 'erro'); }
+}
+
+async function pdfResumoArquivo() {
+  const c = S.cal;
+  const { blob } = await reqArquivo(`/relatorios/funcionario/${c.eid}/pdf?ano=${c.ano}&mes=${c.mes}`);
+  const e = S.eletricistas.find(x => x.id === c.eid) || { nome: 'funcionario' };
+  const nome = 'Resumo_' + e.nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w]+/g, '_') + `_${String(c.mes).padStart(2, '0')}-${c.ano}.pdf`;
+  return new File([blob], nome, { type: 'application/pdf' });
+}
+
+async function abrirPdfResumo() {
+  const janela = window.open('', '_blank');
+  toast('Gerando PDF...');
+  try {
+    const f = await pdfResumoArquivo();
+    const url = URL.createObjectURL(f);
+    if (janela) janela.location.href = url; else baixarArquivo(f);
+  } catch (err) { if (janela) janela.close(); toast(err.message, 'erro'); }
+}
+
+function baixarArquivo(f) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+
+async function enviarResumo() {
+  const c = S.cal; const e = S.eletricistas.find(x => x.id === c.eid) || {};
+  toast('Preparando arquivos...');
+  try {
+    const arquivos = [await pdfResumoArquivo()];
+    for (const cp of (c.comps || [])) {
+      const { blob } = await reqArquivo(`/comprovantes/${cp.id}/arquivo`);
+      const ext = cp.mime === 'application/pdf' ? 'pdf' : (cp.mime.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+      arquivos.push(new File([blob], `Comprovante_${(e.nome || '').replace(/\s+/g, '_')}_${String(c.mes).padStart(2, '0')}-${c.ano}${c.comps.length > 1 ? '_' + cp.id : ''}.${ext}`, { type: cp.mime }));
+    }
+    const fl = c.folhaLinha;
+    const texto = `Olá, ${(e.nome || '').split(' ')[0]}! Segue o resumo das suas diárias de ${MESES[c.mes - 1]}/${c.ano}` +
+      (fl ? ` (valor a receber: R$ ${fmtBR(fl.a_receber)})` : '') + ((c.comps || []).length ? ' e o comprovante de pagamento.' : '.') + ' — AZ Elétrica';
+    if (navigator.canShare && navigator.canShare({ files: arquivos })) {
+      await navigator.share({ files: arquivos, title: `Resumo ${MESES[c.mes - 1]}/${c.ano}`, text: texto });
+      return;
+    }
+    // computador: baixa os arquivos e abre o WhatsApp com a mensagem pronta
+    arquivos.forEach((f, i) => setTimeout(() => baixarArquivo(f), i * 400));
+    const fone = (e.telefone || '').replace(/\D/g, '');
+    const num = fone ? (fone.length <= 11 ? '55' + fone : fone) : '';
+    window.open(`https://wa.me/${num}?text=${encodeURIComponent(texto)}`, '_blank');
+    toast('Arquivos baixados. No WhatsApp, clique no clipe e anexe-os.');
+  } catch (err) { if (err?.name !== 'AbortError') toast(err.message, 'erro'); }
 }
 
 function fecharModal() { document.getElementById('modal-root').innerHTML = ''; }

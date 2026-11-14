@@ -377,3 +377,26 @@ td{padding:10px 14px;vertical-align:middle}
 .ce-linha .btn{flex-shrink:0;min-height:36px}
 .cal-edit .modal-footer .btn{min-height:40px}
 @media(max-width:768px){.cal-edit select,.cal-edit input{font-size:16px}}
+
+/* ── Pagamento do mês (comprovantes, PDF, enviar) ───────────── */
+.cal-pag{margin-top:14px;border:1px solid #dde3ea;border-radius:12px;padding:12px;background:#fcfdff}
+.pg-topo{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px}
+.pg-receber{font-size:13px;color:#334155;margin-top:4px}
+.pg-receber b{font-size:15px;color:#15803d}
+.pg-topo .badge{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.pg-comp{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid #edf0f4;border-radius:8px;background:#fff;margin-bottom:6px}
+.pg-comp>i{font-size:20px;color:var(--azul)}
+.pg-comp-info{flex:1;min-width:0;display:flex;flex-direction:column}
+.pg-comp-info b{font-size:13px}
+.pg-comp-info span{font-size:11px;color:#6b7785;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pg-novo{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px dashed #94a3b8;border-radius:8px;background:#fff;margin:6px 0}
+.pg-novo-arq{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;word-break:break-all}
+.pg-novo-arq span{font-weight:400;color:#9aa5b4}
+.pg-novo input{padding:8px 10px;border:1px solid #dde3ea;border-radius:6px;font-size:14px;font-family:inherit;min-width:0;width:100%}
+.pg-acoes{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.pg-acoes .btn{flex:1 1 auto;justify-content:center;min-height:38px}
+@media(max-width:768px){
+  .pg-novo input{font-size:16px}
+  .pg-acoes .btn{flex:1 1 100%}
+  .pg-acoes .btn-p{order:-1}
+}
