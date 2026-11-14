@@ -362,3 +362,18 @@ td{padding:10px 14px;vertical-align:middle}
   .cal-resumo b{font-size:14px}
   .cal-leg-val{font-size:11px}
 }
+
+/* ── Edição de diária no calendário ─────────────────────────── */
+.cal-cel:not(.cal-trab):not(.cal-vazia){cursor:pointer}
+.cal-cel:not(.cal-trab):not(.cal-vazia):hover{border-color:#94a3b8;border-style:dashed}
+.cal-det-acoes{display:flex;gap:8px;margin-top:10px}
+.cal-det-acoes .btn{flex:1;justify-content:center;min-height:38px}
+.cal-edit .ce-sub{font-size:11px;font-weight:700;color:#4a5568;text-transform:uppercase;letter-spacing:.4px;margin:12px 0 6px}
+.ce-item,.ce-ad{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid #edf0f4;border-radius:8px;margin-bottom:8px;background:#fff}
+.ce-linha{display:flex;gap:6px;align-items:center}
+.ce-linha input{flex:1;min-width:0}
+.cal-edit select,.cal-edit input{padding:8px 10px;border:1px solid #dde3ea;border-radius:6px;font-size:14px;font-family:inherit;background:#fafafa;min-width:0;width:100%}
+.ce-linha select{flex:1.2}
+.ce-linha .btn{flex-shrink:0;min-height:36px}
+.cal-edit .modal-footer .btn{min-height:40px}
+@media(max-width:768px){.cal-edit select,.cal-edit input{font-size:16px}}

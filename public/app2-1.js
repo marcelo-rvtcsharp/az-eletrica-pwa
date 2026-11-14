@@ -1483,10 +1483,13 @@ async function carregarCalendario() {
 function mudarMesCal(delta) {
   const c = S.cal; let m = c.mes + delta, a = c.ano;
   if (m < 1) { m = 12; a--; } if (m > 12) { m = 1; a++; }
-  c.mes = m; c.ano = a; c.dados = null; c.dia = null; renderCalendario(); carregarCalendario();
+  c.mes = m; c.ano = a; c.dados = null; c.dia = null; c.edit = null; renderCalendario(); carregarCalendario();
 }
-function selecionarDiaCal(d) { S.cal.dia = S.cal.dia === d ? null : d; renderCalendario(); }
-function fecharCalendario() { S.cal = null; fecharModal(); }
+function selecionarDiaCal(d) { if (S.cal.edit) return; S.cal.dia = S.cal.dia === d ? null : d; renderCalendario(); }
+function fecharCalendario() {
+  const alterou = S.cal?.alterou; S.cal = null; fecharModal();
+  if (alterou) { carregarDados(); if (S.tela === 'dashboard') carregarDash(); else renderMain(); }
+}
 
 function renderCalendario() {
   const c = S.cal; if (!c) return;
@@ -1513,7 +1516,7 @@ function renderCalendario() {
     const obras = a ? a.itens : [];
     const barras = obras.map(i => `<span class="cal-barra" style="background:${cor(i.obra_nome)}" title="${esc(i.obra_nome)}"></span>`).join('');
     const nomeObra = obras.length ? `<span class="cal-obra">${esc(obras.length > 1 ? obras.length + ' obras' : obras[0].obra_nome)}</span>` : '';
-    cels += `<button class="cal-cel ${a ? 'cal-trab' : ''} ${fds ? 'cal-fds' : ''} ${c.dia === d ? 'cal-sel' : ''} ${ehHoje(d) ? 'cal-hoje' : ''}" ${a ? `onclick="selecionarDiaCal(${d})"` : 'disabled'}
+    cels += `<button class="cal-cel ${a ? 'cal-trab' : ''} ${fds ? 'cal-fds' : ''} ${c.dia === d ? 'cal-sel' : ''} ${ehHoje(d) ? 'cal-hoje' : ''}" onclick="${a ? `selecionarDiaCal(${d})` : `editarDiaCal(${d})`}" ${a ? '' : `title="Lançar diária em ${d}"`}
       style="${a ? `--cor:${cor(obras[0]?.obra_nome)}` : ''}">
       <span class="cal-num">${d}</span>
       ${a ? `<span class="cal-val">${fmtBR(a.total_dia).replace(',00', '')}</span>${nomeObra}<span class="cal-barras">${barras}</span>` : ''}
@@ -1534,8 +1537,13 @@ function renderCalendario() {
       ${a.itens.map(i => `<div class="cal-det-lin"><span><span class="cal-leg-cor" style="background:${cor(i.obra_nome)}"></span>${esc(i.obra_nome)}</span><b>R$ ${fmtBR(i.valor)}</b></div>`).join('')}
       ${a.adicionais.map(x => `<div class="cal-det-lin"><span>+ ${esc(x.tipo_label)}${x.descricao ? ': ' + esc(x.descricao) : ''}</span><b>R$ ${fmtBR(x.valor)}</b></div>`).join('')}
       ${a.observacao ? `<div class="cal-det-obs">${esc(a.observacao)}</div>` : ''}
+      <div class="cal-det-acoes">
+        <button class="btn btn-p" onclick="editarDiaCal(${c.dia})"><i class="ti ti-edit" aria-hidden="true"></i> Editar diária</button>
+        <button class="btn" onclick="excluirDiaCal(${a.id}, ${c.dia})" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i> Excluir</button>
+      </div>
     </div>`;
   }
+  if (c.edit) detalhe = formEdicaoCal();
 
   const carregando = c.dados === null;
   document.getElementById('modal-root').innerHTML = `
@@ -1558,10 +1566,116 @@ function renderCalendario() {
         </div>
         <div class="cal-grade">${DIAS_SEM.map(d => `<div class="cal-sem">${d}</div>`).join('')}${cels}</div>
         ${carregando ? '<div class="loading" style="height:60px"><div class="spinner"></div></div>' : ''}
-        ${detalhe || (diasTrab ? '<p class="cal-dica">Toque num dia marcado para ver os detalhes.</p>' : (carregando ? '' : '<p class="empty">Nenhum dia trabalhado neste mês.</p>'))}
+        ${detalhe || (carregando ? '' : '<p class="cal-dica">Toque num dia marcado para ver, editar ou excluir. Toque num dia vazio para lançar uma diária.</p>')}
         ${legenda ? `<div class="cal-legenda">${legenda}</div>` : ''}
       </div>
     </div>`;
+}
+
+// ── Edição de diária dentro do calendário ─────────────────────
+const TIPOS_AD = { hora_extra: 'Hora extra', sabado_feriado: 'Sábado/Feriado', semana_pesada: 'Semana pesada', outro: 'Outro' };
+function diariaFunc() { const e = S.eletricistas.find(x => x.id === S.cal?.eid); return e?.valor_diaria || 0; }
+
+function editarDiaCal(d) {
+  const c = S.cal; const a = (c.dados || []).find(x => +x.data.slice(8, 10) === d);
+  const data = `${c.ano}-${String(c.mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  c.dia = d;
+  c.edit = a
+    ? { id: a.id, data, dataOrig: data, observacao: a.observacao || '',
+        itens: a.itens.map(i => ({ obra_id: i.obra_id, valor: i.valor })),
+        adicionais: a.adicionais.map(x => ({ tipo: x.tipo, descricao: x.descricao, valor: x.valor })) }
+    : { id: null, data, dataOrig: null, observacao: '', itens: [{ obra_id: '', valor: diariaFunc() }], adicionais: [] };
+  renderCalendario();
+}
+function cancelarEdicaoCal() { S.cal.edit = null; renderCalendario(); }
+
+function lerFormCal() {
+  const ed = S.cal.edit;
+  ed.data = document.getElementById('ce-data')?.value || ed.data;
+  ed.observacao = document.getElementById('ce-obs')?.value || '';
+  ed.itens = [...document.querySelectorAll('.ce-item')].map(r => ({ obra_id: r.querySelector('.ce-obra').value, valor: r.querySelector('.ce-valor').value }));
+  ed.adicionais = [...document.querySelectorAll('.ce-ad')].map(r => ({ tipo: r.querySelector('.ce-ad-tipo').value, descricao: r.querySelector('.ce-ad-desc').value, valor: r.querySelector('.ce-ad-valor').value }));
+}
+function addItemCal() { lerFormCal(); S.cal.edit.itens.push({ obra_id: '', valor: '' }); renderCalendario(); }
+function remItemCal(i) { lerFormCal(); S.cal.edit.itens.splice(i, 1); renderCalendario(); }
+function addAdCal() { lerFormCal(); S.cal.edit.adicionais.push({ tipo: 'hora_extra', descricao: '', valor: '' }); renderCalendario(); }
+function remAdCal(i) { lerFormCal(); S.cal.edit.adicionais.splice(i, 1); renderCalendario(); }
+function preencherValorCal(i, fator) { lerFormCal(); S.cal.edit.itens[i].valor = +(diariaFunc() * fator).toFixed(2); renderCalendario(); }
+function totalEdicaoCal() {
+  const ed = S.cal.edit;
+  return ed.itens.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0) + ed.adicionais.reduce((s, x) => s + (parseFloat(x.valor) || 0), 0);
+}
+function atualizarTotalCal() { lerFormCal(); const el = document.getElementById('ce-total'); if (el) el.textContent = 'R$ ' + fmtBR(totalEdicaoCal()); }
+
+function formEdicaoCal() {
+  const ed = S.cal.edit; const diaria = diariaFunc();
+  const obrasOrd = [...S.obras].sort((a, b) => a.nome.localeCompare(b.nome));
+  const itens = ed.itens.map((it, i) => `
+    <div class="ce-item">
+      <select class="ce-obra" onchange="atualizarTotalCal()"><option value="">Selecione a obra...</option>${obrasOrd.map(o => `<option value="${o.id}" ${String(o.id) === String(it.obra_id) ? 'selected' : ''}>${esc(o.nome)}</option>`).join('')}</select>
+      <div class="ce-linha">
+        <input class="ce-valor" type="number" step="0.01" inputmode="decimal" placeholder="R$ valor" value="${it.valor}" oninput="atualizarTotalCal()" />
+        ${diaria ? `<button class="btn" type="button" onclick="preencherValorCal(${i},1)">1 diária</button><button class="btn" type="button" onclick="preencherValorCal(${i},0.5)">½</button>` : ''}
+        ${ed.itens.length > 1 ? `<button class="btn" type="button" onclick="remItemCal(${i})" style="color:var(--text-danger)" aria-label="Remover obra"><i class="ti ti-trash" aria-hidden="true"></i></button>` : ''}
+      </div>
+    </div>`).join('');
+  const ads = ed.adicionais.map((x, i) => `
+    <div class="ce-ad">
+      <div class="ce-linha">
+        <select class="ce-ad-tipo">${Object.entries(TIPOS_AD).map(([k, v]) => `<option value="${k}" ${x.tipo === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+        <input class="ce-ad-valor" type="number" step="0.01" inputmode="decimal" placeholder="R$" value="${x.valor}" oninput="atualizarTotalCal()" />
+        <button class="btn" type="button" onclick="remAdCal(${i})" style="color:var(--text-danger)" aria-label="Remover adicional"><i class="ti ti-trash" aria-hidden="true"></i></button>
+      </div>
+      <input class="ce-ad-desc" placeholder="Descrição (ex: 2h extra)" value="${esc(x.descricao || '')}" />
+    </div>`).join('');
+  return `<div class="cal-detalhe cal-edit">
+    <div class="cal-det-tit">${ed.id ? 'Editar diária' : 'Lançar diária'}<span id="ce-total">R$ ${fmtBR(totalEdicaoCal())}</span></div>
+    <div class="field"><label>Data</label><input id="ce-data" type="date" value="${ed.data}" /></div>
+    <div class="ce-sub">Obras do dia</div>
+    ${itens}
+    <button class="btn" type="button" onclick="addItemCal()"><i class="ti ti-plus" aria-hidden="true"></i> Outra obra no mesmo dia</button>
+    <div class="ce-sub">Adicionais <span style="font-weight:400;color:#9aa5b4">(hora extra, sábado...)</span></div>
+    ${ads}
+    <button class="btn" type="button" onclick="addAdCal()"><i class="ti ti-plus" aria-hidden="true"></i> Adicional</button>
+    <div class="field" style="margin-top:10px"><label>Observação</label><input id="ce-obs" value="${esc(ed.observacao)}" placeholder="Ex: meia diária, choveu..." /></div>
+    <div class="modal-footer">
+      <button class="btn" type="button" onclick="cancelarEdicaoCal()">Cancelar</button>
+      <button class="btn btn-p" type="button" onclick="salvarEdicaoCal()"><i class="ti ti-device-floppy" aria-hidden="true"></i> Salvar</button>
+    </div>
+  </div>`;
+}
+
+async function salvarEdicaoCal() {
+  lerFormCal();
+  const c = S.cal, ed = c.edit;
+  const itens = ed.itens.filter(i => i.obra_id || parseFloat(i.valor)).map(i => ({ obra_id: +i.obra_id, valor: parseFloat(i.valor) || 0 }));
+  if (!itens.length) { toast('Adicione pelo menos uma obra', 'erro'); return; }
+  if (itens.some(i => !i.obra_id)) { toast('Escolha a obra em todas as linhas', 'erro'); return; }
+  if (itens.some(i => i.valor <= 0)) { toast('Informe o valor de cada obra', 'erro'); return; }
+  const adicionais = ed.adicionais.filter(x => parseFloat(x.valor) > 0)
+    .map(x => ({ tipo: x.tipo, descricao: x.descricao?.trim() || TIPOS_AD[x.tipo], valor: parseFloat(x.valor) }));
+  if (!ed.data) { toast('Informe a data', 'erro'); return; }
+  const mudouData = ed.dataOrig && ed.data !== ed.dataOrig;
+  const ocupado = (c.dados || []).some(a => a.data === ed.data && a.id !== ed.id);
+  if ((mudouData || !ed.id) && ocupado && !confirm(`Já existe diária em ${fmtData(ed.data)}. Substituir pela nova?`)) return;
+  try {
+    await req('POST', '/apontamentos/', { eletricista_id: c.eid, data: ed.data, observacao: ed.observacao.trim() || null, itens, adicionais });
+    if (mudouData && ed.id) await req('DELETE', `/apontamentos/${ed.id}`);
+    c.alterou = true; c.edit = null;
+    const d = new Date(ed.data + 'T12:00:00');
+    if (d.getFullYear() !== c.ano || d.getMonth() + 1 !== c.mes) { c.ano = d.getFullYear(); c.mes = d.getMonth() + 1; }
+    c.dia = d.getDate(); c.dados = null;
+    toast('Diária salva!'); renderCalendario(); carregarCalendario();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+async function excluirDiaCal(id, d) {
+  if (!confirm(`Excluir a diária do dia ${d}? Isso tira o valor da obra e da folha.`)) return;
+  try {
+    await req('DELETE', `/apontamentos/${id}`);
+    S.cal.alterou = true; S.cal.dia = null; S.cal.dados = null;
+    toast('Diária excluída!'); renderCalendario(); carregarCalendario();
+  } catch (err) { toast(err.message, 'erro'); }
 }
 
 function fecharModal() { document.getElementById('modal-root').innerHTML = ''; }
