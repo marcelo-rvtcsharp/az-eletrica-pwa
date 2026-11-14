@@ -65,9 +65,8 @@ async function handleLogin(e) {
 }
 
 function iniciarApp() {
-  const u = JSON.parse(localStorage.getItem('az_user') || '{}');
-  document.getElementById('usuario-nome').textContent = u.nome || '';
-  const mh = document.getElementById('mh-user'); if (mh) mh.textContent = u.nome || '';
+  mostrarUsuarioLogado();
+  atualizarUsuarioLogado();   // pega nome/cargo atualizados do servidor
   montarNavMobile();
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
@@ -152,6 +151,7 @@ function renderMain() {
     case 'folha': carregarFolha(); break;
     case 'despesas': carregarDespesas(); break;
     case 'ferramentas': carregarFerramentas(); break;
+    case 'usuarios': carregarUsuarios(); break;
   }
 }
 
@@ -1675,6 +1675,100 @@ async function excluirDiaCal(id, d) {
     await req('DELETE', `/apontamentos/${id}`);
     S.cal.alterou = true; S.cal.dia = null; S.cal.dados = null;
     toast('Diária excluída!'); renderCalendario(); carregarCalendario();
+  } catch (err) { toast(err.message, 'erro'); }
+}
+
+// ── USUÁRIOS (quem entra no app) ───────────────────────────────
+async function carregarUsuarios() {
+  const main = document.getElementById('main');
+  if (S.tela !== 'usuarios' || !main) return;
+  if (!S.usuarios) main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
+  try { S.usuarios = await req('GET', '/auth/usuarios') || []; renderUsuarios(main); }
+  catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
+}
+
+function usuarioLogado() { try { return JSON.parse(localStorage.getItem('az_user') || '{}'); } catch { return {}; } }
+
+function mostrarUsuarioLogado() {
+  const u = usuarioLogado();
+  const txt = u.nome ? u.nome + (u.cargo ? ' · ' + u.cargo : '') : '';
+  const a = document.getElementById('usuario-nome'); if (a) a.textContent = txt;
+  const b = document.getElementById('mh-user'); if (b) b.textContent = u.nome || '';
+}
+
+async function atualizarUsuarioLogado() {
+  try { const me = await req('GET', '/auth/me'); if (me) { localStorage.setItem('az_user', JSON.stringify(me)); mostrarUsuarioLogado(); } } catch {}
+}
+
+function renderUsuarios(main) {
+  const eu = usuarioLogado().id;
+  const linhas = (S.usuarios || []).map(u => `
+    <tr style="${u.ativo ? '' : 'opacity:.55'}">
+      <td><div class="elet-cell">
+        <div class="av" style="background:#fef3c7;color:#a16207">${esc(u.nome.replace(/^ENG\.?\s*/i, '').split(' ').map(p => p[0]).slice(0, 2).join('').toUpperCase())}</div>
+        <div><div style="font-size:13px;font-weight:600;color:var(--text-primary)">${esc(u.nome)}${u.id === eu ? ' <span class="badge b-g" style="margin-left:4px">você</span>' : ''}</div>
+          <div style="font-size:11px;color:var(--text-muted)">${esc(u.cargo || '—')}</div></div></div></td>
+      <td style="color:var(--text-muted)">${esc(u.email)}</td>
+      <td><span class="badge ${u.ativo ? 'b-g' : ''}">${u.ativo ? 'Ativo' : 'Desativado'}</span></td>
+      <td><div style="display:flex;gap:4px;justify-content:flex-end">
+        <button class="btn" onclick="abrirModalUsuario(${u.id})" title="Editar"><i class="ti ti-edit" aria-hidden="true"></i></button>
+      </div></td></tr>`).join('');
+  main.innerHTML = `
+    <div class="topbar">
+      <div><div class="topbar-title">Usuários</div><div class="topbar-sub">Quem pode entrar no app · todos têm acesso completo</div></div>
+      <div style="display:flex;gap:8px"><button class="btn btn-p" onclick="abrirModalUsuario()"><i class="ti ti-user-plus" aria-hidden="true"></i> Novo usuário</button></div>
+    </div>
+    <div class="content">
+      <div class="table-card">
+        <table class="tbl-cards">
+          <thead><tr><th>Nome</th><th>E-mail (login)</th><th>Status</th><th></th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="4" class="empty">Nenhum usuário</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function abrirModalUsuario(id) {
+  const u = id ? (S.usuarios || []).find(x => x.id === id) : null;
+  const eu = u && u.id === usuarioLogado().id;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
+      <div class="modal">
+        <div class="modal-header"><span class="modal-title">${u ? (eu ? 'Meu perfil' : 'Editar usuário') : 'Novo usuário'}</span><button class="btn" onclick="fecharModal()" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <div class="field"><label>Nome (como aparece no app) *</label><input id="mu-nome" value="${esc(u?.nome || '')}" placeholder="Ex: ELDO SANTOS AZEVEDO" /></div>
+        <div class="field"><label>Cargo</label><input id="mu-cargo" value="${esc(u?.cargo || '')}" placeholder="Ex: CEO, Engenheiro, Encarregado" /></div>
+        <div class="field"><label>E-mail (usado para entrar) *</label><input id="mu-email" type="email" autocomplete="off" value="${esc(u?.email || '')}" placeholder="nome@email.com" /></div>
+        <div class="field"><label>${u ? 'Nova senha' : 'Senha *'} <span style="font-weight:400;color:var(--text-muted)">${u ? '(deixe em branco para manter a atual)' : '(mínimo 6 caracteres)'}</span></label>
+          <input id="mu-senha" type="password" autocomplete="new-password" placeholder="••••••" /></div>
+        ${u && !eu ? `<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0"><input id="mu-ativo" type="checkbox" ${u.ativo ? 'checked' : ''} style="width:auto" /> Pode entrar no app (ativo)</label>` : ''}
+        ${u ? '' : '<p style="font-size:12px;color:var(--text-muted);margin:4px 0 0">O novo usuário terá acesso a tudo: obras, equipe, folha, financeiro, despesas, ferramentas e orçamentos.</p>'}
+        <div class="modal-footer">
+          <button class="btn" onclick="fecharModal()">Cancelar</button>
+          <button class="btn btn-p" onclick="salvarUsuario(${u?.id || 'null'})">${u ? 'Salvar' : 'Criar usuário'}</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById('mu-nome')?.focus(), 50);
+}
+
+async function salvarUsuario(id) {
+  const nome = document.getElementById('mu-nome').value.trim();
+  const cargo = document.getElementById('mu-cargo').value.trim();
+  const email = document.getElementById('mu-email').value.trim();
+  const senha = document.getElementById('mu-senha').value;
+  const ativoEl = document.getElementById('mu-ativo');
+  if (!nome || !email) { toast('Preencha nome e e-mail', 'erro'); return; }
+  if (!id && senha.length < 6) { toast('A senha precisa ter pelo menos 6 caracteres', 'erro'); return; }
+  if (id && senha && senha.length < 6) { toast('A nova senha precisa ter pelo menos 6 caracteres', 'erro'); return; }
+  try {
+    if (id) {
+      const atual = S.usuarios.find(x => x.id === id);
+      await req('PUT', `/auth/usuarios/${id}`, { nome, cargo: cargo || null, email, ativo: ativoEl ? ativoEl.checked : atual.ativo, nova_senha: senha || null });
+      if (id === usuarioLogado().id) await atualizarUsuarioLogado();
+    } else {
+      await req('POST', '/auth/registro', { nome, cargo: cargo || null, email, senha });
+    }
+    fecharModal(); toast(id ? 'Usuário atualizado!' : 'Usuário criado!'); carregarUsuarios();
   } catch (err) { toast(err.message, 'erro'); }
 }
 
