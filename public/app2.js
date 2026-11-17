@@ -1818,18 +1818,38 @@ function renderCalendario() {
 }
 
 // ── Edição de diária dentro do calendário ─────────────────────
-const TIPOS_AD = { hora_extra: 'Hora extra', sabado_feriado: 'Sábado/Feriado', semana_pesada: 'Semana pesada', outro: 'Outro' };
+const TIPOS_AD = { sabado_feriado: 'Sábado/Feriado', semana_pesada: 'Semana pesada', outro: 'Outro', hora_extra: 'Hora extra' };
 function diariaFunc() { const e = S.eletricistas.find(x => x.id === S.cal?.eid); return e?.valor_diaria || 0; }
+// Hora extra: mesma regra do app do funcionário (diária ÷ 8 por hora), somada no valor da 1ª obra
+// e registrada na observação como "OBRA: 1,5h extra (R$ 33.75)".
+const RE_HE_OBS = /(?:\s*·\s*|;\s*)?(?:[^·;]*?:\s*)?(\d+(?:[.,]\d+)?)\s*h\s*extra\s*\(R\$\s*([\d.,]+)\)/gi;
+function valorHoraExtra() { return diariaFunc() / 8; }
+function fmtHoras(h) { return String(h).replace('.', ',') + 'h'; }
+function separarHoraExtra(a) {
+  // horas e valor que estão somados na obra (vindos da planilha ou do app do funcionário)
+  let horas = 0, valorNaObra = 0;
+  const obs = (a.observacao || '').replace(RE_HE_OBS, (m, h, v) => { horas += parseFloat(h.replace(',', '.')); valorNaObra += parseFloat(v.replace(',', '.')); return ''; })
+    .replace(/^\s*[·;]\s*|\s*[·;]\s*$/g, '').trim();
+  // horas lançadas antes como "adicional"
+  const outros = [];
+  for (const x of a.adicionais || []) {
+    if (x.tipo !== 'hora_extra') { outros.push({ tipo: x.tipo, descricao: x.descricao, valor: x.valor }); continue; }
+    const m = /(\d+(?:[.,]\d+)?)\s*h/i.exec(x.descricao || '');
+    horas += m ? parseFloat(m[1].replace(',', '.')) : (valorHoraExtra() ? x.valor / valorHoraExtra() : 0);
+  }
+  horas = Math.round(horas * 2) / 2;
+  const itens = a.itens.map((i, k) => ({ obra_id: i.obra_id, valor: +(k === 0 ? i.valor - valorNaObra : i.valor).toFixed(2) }));
+  return { horas, itens, outros, obs };
+}
 
 function editarDiaCal(d) {
   const c = S.cal; const a = (c.dados || []).find(x => +x.data.slice(8, 10) === d);
   const data = `${c.ano}-${String(c.mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   c.dia = d;
-  c.edit = a
-    ? { id: a.id, data, dataOrig: data, observacao: a.observacao || '',
-        itens: a.itens.map(i => ({ obra_id: i.obra_id, valor: i.valor })),
-        adicionais: a.adicionais.map(x => ({ tipo: x.tipo, descricao: x.descricao, valor: x.valor })) }
-    : { id: null, data, dataOrig: null, observacao: '', itens: [{ obra_id: '', valor: diariaFunc() }], adicionais: [] };
+  if (a) {
+    const sep = separarHoraExtra(a);
+    c.edit = { id: a.id, data, dataOrig: data, observacao: sep.obs, itens: sep.itens, adicionais: sep.outros, he: sep.horas };
+  } else c.edit = { id: null, data, dataOrig: null, observacao: '', itens: [{ obra_id: '', valor: diariaFunc() }], adicionais: [], he: 0 };
   renderCalendario();
 }
 function cancelarEdicaoCal() { S.cal.edit = null; renderCalendario(); }
@@ -1843,12 +1863,20 @@ function lerFormCal() {
 }
 function addItemCal() { lerFormCal(); S.cal.edit.itens.push({ obra_id: '', valor: '' }); renderCalendario(); }
 function remItemCal(i) { lerFormCal(); S.cal.edit.itens.splice(i, 1); renderCalendario(); }
-function addAdCal() { lerFormCal(); S.cal.edit.adicionais.push({ tipo: 'hora_extra', descricao: '', valor: '' }); renderCalendario(); }
+function addAdCal() { lerFormCal(); S.cal.edit.adicionais.push({ tipo: 'sabado_feriado', descricao: '', valor: '' }); renderCalendario(); }
+function heCal(delta) {
+  lerFormCal(); const ed = S.cal.edit;
+  ed.he = Math.min(12, Math.max(0, (ed.he || 0) + delta));
+  const el = document.getElementById('ce-he'); if (el) el.textContent = fmtHoras(ed.he);
+  const v = document.getElementById('ce-he-valor'); if (v) v.textContent = ed.he ? '+ R$ ' + fmtBR(ed.he * valorHoraExtra()) : 'sem hora extra';
+  atualizarTotalCal();
+}
 function remAdCal(i) { lerFormCal(); S.cal.edit.adicionais.splice(i, 1); renderCalendario(); }
 function preencherValorCal(i, fator) { lerFormCal(); S.cal.edit.itens[i].valor = +(diariaFunc() * fator).toFixed(2); renderCalendario(); }
 function totalEdicaoCal() {
   const ed = S.cal.edit;
-  return ed.itens.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0) + ed.adicionais.reduce((s, x) => s + (parseFloat(x.valor) || 0), 0);
+  return ed.itens.reduce((s, i) => s + (parseFloat(i.valor) || 0), 0) + ed.adicionais.reduce((s, x) => s + (parseFloat(x.valor) || 0), 0)
+    + (ed.he || 0) * valorHoraExtra();
 }
 function atualizarTotalCal() { lerFormCal(); const el = document.getElementById('ce-total'); if (el) el.textContent = 'R$ ' + fmtBR(totalEdicaoCal()); }
 
@@ -1879,7 +1907,16 @@ function formEdicaoCal() {
     <div class="ce-sub">Obras do dia</div>
     ${itens}
     <button class="btn" type="button" onclick="addItemCal()"><i class="ti ti-plus" aria-hidden="true"></i> Outra obra no mesmo dia</button>
-    <div class="ce-sub">Adicionais <span style="font-weight:400;color:#9aa5b4">(hora extra, sábado...)</span></div>
+    <div class="ce-he">
+      <div><div class="ce-he-tit">Hora extra</div><div class="ce-he-sub" id="ce-he-valor">${ed.he ? '+ R$ ' + fmtBR(ed.he * valorHoraExtra()) : 'sem hora extra'}</div>
+        <div class="ce-he-sub">${diaria ? `R$ ${fmtBR(valorHoraExtra())} por hora (diária ÷ 8)` : 'Cadastre a diária do funcionário para calcular'}</div></div>
+      <div class="ce-step">
+        <button class="btn" type="button" onclick="heCal(-0.5)" aria-label="Menos meia hora"><i class="ti ti-minus" aria-hidden="true"></i></button>
+        <span id="ce-he">${fmtHoras(ed.he || 0)}</span>
+        <button class="btn" type="button" onclick="heCal(0.5)" aria-label="Mais meia hora"><i class="ti ti-plus" aria-hidden="true"></i></button>
+      </div>
+    </div>
+    <div class="ce-sub">Outros adicionais <span style="font-weight:400;color:#9aa5b4">(sábado, feriado...)</span></div>
     ${ads}
     <button class="btn" type="button" onclick="addAdCal()"><i class="ti ti-plus" aria-hidden="true"></i> Adicional</button>
     <div class="field" style="margin-top:10px"><label>Observação</label><input id="ce-obs" value="${esc(ed.observacao)}" placeholder="Ex: meia diária, choveu..." /></div>
@@ -1900,11 +1937,19 @@ async function salvarEdicaoCal() {
   const adicionais = ed.adicionais.filter(x => parseFloat(x.valor) > 0)
     .map(x => ({ tipo: x.tipo, descricao: x.descricao?.trim() || TIPOS_AD[x.tipo], valor: parseFloat(x.valor) }));
   if (!ed.data) { toast('Informe a data', 'erro'); return; }
+  // hora extra: soma no valor da 1ª obra e registra na observação (igual ao app do funcionário)
+  let observacao = ed.observacao.trim();
+  if (ed.he > 0) {
+    const vhe = +(ed.he * valorHoraExtra()).toFixed(2);
+    itens[0].valor = +(itens[0].valor + vhe).toFixed(2);
+    const obra = (S.obras.find(o => o.id === itens[0].obra_id) || {}).nome || 'OBRA';
+    observacao = [`${obra}: ${fmtHoras(ed.he)} extra (R$ ${vhe.toFixed(2)})`, observacao].filter(Boolean).join(' · ');
+  }
   const mudouData = ed.dataOrig && ed.data !== ed.dataOrig;
   const ocupado = (c.dados || []).some(a => a.data === ed.data && a.id !== ed.id);
   if ((mudouData || !ed.id) && ocupado && !confirm(`Já existe diária em ${fmtData(ed.data)}. Substituir pela nova?`)) return;
   try {
-    await req('POST', '/apontamentos/', { eletricista_id: c.eid, data: ed.data, observacao: ed.observacao.trim() || null, itens, adicionais });
+    await req('POST', '/apontamentos/', { eletricista_id: c.eid, data: ed.data, observacao: observacao || null, itens, adicionais });
     if (mudouData && ed.id) await req('DELETE', `/apontamentos/${ed.id}`);
     c.alterou = true; c.edit = null;
     const d = new Date(ed.data + 'T12:00:00');
