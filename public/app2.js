@@ -1269,7 +1269,10 @@ async function carregarDespesas() {
   const main = document.getElementById('main');
   if (S.tela !== 'despesas' || !main) return;
   main.innerHTML = '<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
-  try { S.desp = await req('GET', `/despesas/?ano=${S.finAno}&mes=${S.finMes}`); renderDespesas(main); }
+  try {
+    const [d, cfg] = await Promise.all([req('GET', `/despesas/?ano=${S.finAno}&mes=${S.finMes}`), req('GET', '/despesas/alimentacao/config').catch(() => null)]);
+    S.desp = d; S.alimCfg = cfg; renderDespesas(main);
+  }
   catch (err) { main.innerHTML = `<div class="content"><p class="empty">${esc(err.message)}</p></div>`; }
 }
 
@@ -1304,12 +1307,17 @@ function renderDespesas(main) {
     <div class="topbar">
       <div><div class="topbar-title">Despesas</div><div class="topbar-sub">Alimentação e outros custos · ${MESES[S.finMes - 1]} de ${S.finAno}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn" onclick="abrirModalCalcAlim()"><i class="ti ti-calculator" aria-hidden="true"></i> Calcular alimentação</button>
+        <button class="btn" onclick="abrirModalCalcAlim()"><i class="ti ti-settings" aria-hidden="true"></i> Alimentação automática</button>
         <button class="btn btn-p" onclick="abrirModalDesp()"><i class="ti ti-plus" aria-hidden="true"></i> Nova despesa</button>
       </div>
     </div>
     <div class="content">
       <div style="margin-bottom:14px">${seletorMes('carregarDespesas')}</div>
+      ${S.alimCfg ? `<button class="alim-auto ${S.alimCfg.automatica ? 'on' : ''}" onclick="abrirModalCalcAlim()">
+        <i class="ti ${S.alimCfg.automatica ? 'ti-bolt' : 'ti-bolt-off'}" aria-hidden="true"></i>
+        <span><b>Alimentação automática ${S.alimCfg.automatica ? 'ligada' : 'desligada'}</b><br>
+        ${S.alimCfg.automatica ? `Cada diária apontada já soma R$ ${fmtBR(S.alimCfg.valor_pessoa)} por pessoa no dia${S.alimCfg.incluir_mensalistas ? ' (mensalistas incluídos)' : ''}. Dias lançados à mão não são alterados.` : 'Toque para ligar: a alimentação passa a ser somada sozinha a cada diária.'}</span>
+        <i class="ti ti-chevron-right" aria-hidden="true"></i></button>` : ''}
       <div class="metrics">
         <div class="metric"><div class="metric-ico amber"><i class="ti ti-tools-kitchen-2" aria-hidden="true"></i></div><div class="metric-label">Alimentação</div><div class="metric-val">R$ ${fmtBR(al.total)}</div><div class="metric-sub">${al.refeicoes || 0} refeições em ${al.dias || 0} dia(s)</div></div>
         <div class="metric"><div class="metric-ico blue"><i class="ti ti-users" aria-hidden="true"></i></div><div class="metric-label">Média de pessoas/dia</div><div class="metric-val">${al.dias ? (al.refeicoes / al.dias).toFixed(1) : '0'}</div><div class="metric-sub">nos dias com refeição</div></div>
@@ -1320,7 +1328,7 @@ function renderDespesas(main) {
         <div class="table-card" style="overflow-x:auto">
           <table class="tbl-cards">
             <thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th style="text-align:right">Valor</th><th></th></tr></thead>
-            <tbody>${linhas || '<tr><td colspan="5" class="empty">Nenhuma despesa neste mês. Use "Calcular alimentação" para gerar pelos apontamentos.</td></tr>'}</tbody>
+            <tbody>${linhas || '<tr><td colspan="5" class="empty">Nenhuma despesa neste mês.</td></tr>'}</tbody>
           </table>
         </div>
         <div class="card" style="align-self:start">
@@ -1332,16 +1340,19 @@ function renderDespesas(main) {
 }
 
 function abrirModalCalcAlim() {
+  const cfg = S.alimCfg || { automatica: true, valor_pessoa: valorPessoaPadrao(), incluir_mensalistas: true };
   document.getElementById('modal-root').innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this)fecharModal()">
       <div class="modal">
-        <div class="modal-header"><span class="modal-title">Calcular alimentação · ${MESES[S.finMes - 1]}/${S.finAno}</span><button class="btn" onclick="fecharModal()"><i class="ti ti-x" aria-hidden="true"></i></button></div>
-        <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">Para cada dia com apontamento, conta quem trabalhou e multiplica pelo valor por pessoa. Dias que você lançou ou editou à mão não são alterados.</p>
-        <div class="field"><label>Valor por pessoa/dia (R$)</label><input id="ca-valor" type="number" step="0.01" value="${valorPessoaPadrao()}" /></div>
-        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0 4px"><input id="ca-mens" type="checkbox" checked style="width:auto" /> Incluir mensalistas em todo dia com equipe trabalhando</label>
+        <div class="modal-header"><span class="modal-title">Alimentação automática</span><button class="btn" onclick="fecharModal()" aria-label="Fechar"><i class="ti ti-x" aria-hidden="true"></i></button></div>
+        <label class="alim-sw"><input id="ca-auto" type="checkbox" ${cfg.automatica ? 'checked' : ''} />
+          <span><b>Somar sozinha a cada diária</b><br><small>Quando alguém aponta, corrige ou apaga uma diária, a alimentação daquele dia é refeita: pessoas que trabalharam × valor por pessoa.</small></span></label>
+        <div class="field" style="margin-top:12px"><label>Valor por pessoa/dia (R$)</label><input id="ca-valor" type="number" step="0.01" inputmode="decimal" value="${cfg.valor_pessoa}" /></div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0 4px"><input id="ca-mens" type="checkbox" ${cfg.incluir_mensalistas ? 'checked' : ''} style="width:auto" /> Incluir mensalistas em todo dia com equipe trabalhando</label>
+        <p style="font-size:12px;color:var(--text-muted);margin:10px 0 0">Ao salvar, ${MESES[S.finMes - 1]}/${S.finAno} é recalculado com estes valores. Dias que você lançou ou editou à mão continuam como estão. Você pode sempre lançar alimentação manual em "Nova despesa".</p>
         <div class="modal-footer">
           <button class="btn" onclick="fecharModal()">Cancelar</button>
-          <button class="btn btn-p" onclick="calcularAlimentacao()">Calcular</button>
+          <button class="btn btn-p" onclick="calcularAlimentacao()"><i class="ti ti-check" aria-hidden="true"></i> Salvar e recalcular</button>
         </div>
       </div>
     </div>`;
@@ -1350,10 +1361,11 @@ function abrirModalCalcAlim() {
 async function calcularAlimentacao() {
   const valor = parseFloat(document.getElementById('ca-valor').value) || 0;
   if (valor <= 0) { toast('Informe o valor por pessoa', 'erro'); return; }
+  const auto = document.getElementById('ca-auto').checked, mens = document.getElementById('ca-mens').checked;
   try {
-    const r = await req('POST', '/despesas/alimentacao/calcular', { ano: S.finAno, mes: S.finMes, valor_pessoa: valor, incluir_mensalistas: document.getElementById('ca-mens').checked });
-    try { localStorage.setItem('az_valor_refeicao', valor); } catch {}
-    fecharModal(); toast(`Alimentação calculada: ${r.dias} dia(s), R$ ${fmtBR(r.total)}`); carregarDespesas();
+    S.alimCfg = await req('PUT', '/despesas/alimentacao/config', { automatica: auto, valor_pessoa: valor, incluir_mensalistas: mens });
+    const r = await req('POST', '/despesas/alimentacao/calcular', { ano: S.finAno, mes: S.finMes, valor_pessoa: valor, incluir_mensalistas: mens });
+    fecharModal(); toast(`${auto ? 'Automática ligada. ' : ''}${MESES[S.finMes - 1]}: ${r.dias} dia(s), R$ ${fmtBR(r.total)}`); carregarDespesas();
   } catch (err) { toast(err.message, 'erro'); }
 }
 
