@@ -797,15 +797,16 @@ function renderOrcs(main) {
   const rasc = S.orcamentos.filter(o => o.status === 'Rascunho').length;
 
   const linhas = S.orcamentos.map(o => `
-    <tr onclick="abrirOrc(${o.id})" style="cursor:pointer">
+    <tr onclick="abrirOrc(${o.id})" style="cursor:pointer" class="${o.status === 'Aprovado' ? 'orc-aprovado' : ''}">
       <td data-label="Nº" style="font-size:11px;color:var(--text-muted);font-family:monospace">${esc(o.numero || '')}</td>
       <td class="td-titulo" style="font-size:13px;font-weight:500;color:var(--text-primary)">${esc(o.cliente_nome || '—')}</td>
       <td data-label="Obra" style="font-size:11px;color:var(--text-muted)">${esc(o.obra_descricao || '—')}</td>
       <td data-label="Data" style="font-size:11px;color:var(--text-muted)">${fmtData(o.data)}</td>
       <td data-label="Total" class="td-destaque" style="text-align:right;font-size:13px;font-weight:500">R$ ${fmtBR(o.total)}</td>
-      <td data-label="Status"><span class="badge ${bc[o.status] || ''}">${o.status}</span></td>
+      <td data-label="Status" onclick="event.stopPropagation()"><select class="badge sel-status ${bc[o.status] || ''}" onchange="mudarStatusOrc(${o.id},this.value)" title="Mudar status">${['Rascunho','Enviado','Aprovado','Reprovado'].map(s => `<option ${o.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></td>
       <td class="td-acoes">
         <div style="display:flex;gap:4px;justify-content:flex-end">
+          ${o.status !== 'Aprovado' ? `<button class="btn btn-aprovar" onclick="event.stopPropagation();mudarStatusOrc(${o.id},'Aprovado')" title="Marcar como aprovado"><i class="ti ti-circle-check" aria-hidden="true"></i></button>` : ''}
           <button class="btn" onclick="event.stopPropagation();dupOrc(${o.id})" title="Duplicar"><i class="ti ti-copy" aria-hidden="true"></i></button>
           <button class="btn btn-whats" onclick="event.stopPropagation();pdfOrc(${o.id})" title="PDF / Enviar pelo WhatsApp"><i class="ti ti-brand-whatsapp" aria-hidden="true"></i></button>
           <button class="btn" onclick="event.stopPropagation();delOrc(${o.id})" title="Excluir" style="color:var(--text-danger)"><i class="ti ti-trash" aria-hidden="true"></i></button>
@@ -832,6 +833,16 @@ function renderOrcs(main) {
         </table>
       </div>
     </div>`;
+}
+
+// Muda só o status do orçamento, direto da lista
+async function mudarStatusOrc(id, status) {
+  const o = S.orcamentos.find(x => x.id === id); if (!o || o.status === status) return;
+  try {
+    const u = await req('PUT', `/orcamentos/${id}`, { cliente_nome: o.cliente_nome, cliente_cnpj: o.cliente_cnpj, cliente_endereco: o.cliente_endereco, obra_descricao: o.obra_descricao, data: o.data, validade: parseInt(o.validade) || 10, status, obs: o.obs, itens: (o.itens || []).map((it, i) => ({ descricao: it.descricao, und: it.und, qtd: parseFloat(it.qtd) || 0, vunit: parseFloat(it.vunit) || 0, ordem: i })) });
+    S.orcamentos = S.orcamentos.map(x => x.id === u.id ? u : x);
+    toast(status === 'Aprovado' ? 'Orçamento aprovado!' : 'Status: ' + status); renderMain();
+  } catch (err) { toast(err.message, 'erro'); renderMain(); }
 }
 
 async function novoOrc() {
